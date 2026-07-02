@@ -132,6 +132,22 @@ Or manually add the scoped registry to your `Packages/manifest.json`:
 2. Import the downloaded package into your Unity project.
 3. The installer will automatically configure OpenUPM in your `manifest.json` file and install the package dependencies.
 
+### Method 3: Manual installation
+
+1. Open `Package Manager` window.
+2. Click on the `+` icon.
+3. Select **Install from git URL...** and paste this link:
+
+```txt
+https://github.com/Saesentsessis/Unity-Collections-Specialized.git?path=Unity-Collections-Specialized/Assets/root
+```
+
+You can specify exact release version of this package like this:
+
+```txt
+https://github.com/Saesentsessis/Unity-Collections-Specialized.git?path=Unity-Collections-Specialized/Assets/root#0.1.0
+```
+
 ## License
 
 Licensed under [MIT License](./LICENSE).
