@@ -1,0 +1,26 @@
+# OpenUPM listing for signed GitHub Release tracking
+
+Submit the package once at https://openupm.com/packages/add/ using:
+
+- Repository: `https://github.com/Saesentsessis/Unity-Collections-Specialized`
+
+Then open a PR to [openupm/openupm](https://github.com/openupm/openupm) creating or updating
+`data/packages/com.saesentsessis.unity-collections-specialized.yml`:
+
+```yaml
+name: com.saesentsessis.unity-collections-specialized
+displayName: Unity Collections Specialized
+description: Specialized collection types with stable index handles for Unity.Collections and Burst.
+repoUrl: https://github.com/Saesentsessis/Unity-Collections-Specialized
+gitUrl: https://github.com/Saesentsessis/Unity-Collections-Specialized.git
+license: MIT
+licenseUrl: https://github.com/Saesentsessis/Unity-Collections-Specialized/blob/main/Unity-Collections-Specialized/Assets/root/LICENSE
+author:
+  name: Saesentsessis
+  url: https://github.com/Saesentsessis
+trackingMode: githubRelease
+githubReleaseAssetName: 'com.saesentsessis.unity-collections-specialized-'
+```
+
+After the first GitHub Release (`0.1.0`) is published with the signed `.tgz` asset, OpenUPM
+indexes the release within ~30 minutes.

@@ -38,27 +38,27 @@ $ErrorActionPreference = "Stop"
 # Version file locations (relative to script root)
 $VersionFiles = @(
     @{
-        Path        = "Unity-Package/Assets/root/package.json"
+        Path        = "Unity-Collections-Specialized/Assets/root/package.json"
         Pattern     = '"version":\s*"[\d\.]+"'
         Replace     = '"version": "{VERSION}"'
         Description = "Unity package version"
     },
     @{
-        Path        = "Installer/Assets/YOUR_PACKAGE_NAME_INSTALLER/Installer.cs"
+        Path        = "Installer/Assets/Unity Collections Specialized Installer/Installer.cs"
         Pattern     = 'public const string Version = "[\d\.]+";'
         Replace     = 'public const string Version = "{VERSION}";'
         Description = "Installer C# version constant"
     },
     @{
-        Path        = "Unity-Package/Assets/root/README.md"
-        Pattern     = "https://github\.com/YOUR_GITHUB_USERNAME_REPOSITORY/releases/download/[\d\.]+/YOUR_PACKAGE_NAME_INSTALLER_FILE\.unitypackage"
-        Replace     = "https://github.com/YOUR_GITHUB_USERNAME_REPOSITORY/releases/download/{VERSION}/YOUR_PACKAGE_NAME_INSTALLER_FILE.unitypackage"
+        Path        = "Unity-Collections-Specialized/Assets/root/README.md"
+        Pattern     = "https://github\.com/Saesentsessis/Unity-Collections-Specialized/releases/download/[\d\.]+/Unity-Collections-Specialized-Installer\.unitypackage"
+        Replace     = "https://github.com/Saesentsessis/Unity-Collections-Specialized/releases/download/{VERSION}/Unity-Collections-Specialized-Installer.unitypackage"
         Description = "Package README download URL"
     },
     @{
         Path        = "README.md"
-        Pattern     = "https://github\.com/YOUR_GITHUB_USERNAME_REPOSITORY/releases/download/[\d\.]+/YOUR_PACKAGE_NAME_INSTALLER_FILE\.unitypackage"
-        Replace     = "https://github.com/YOUR_GITHUB_USERNAME_REPOSITORY/releases/download/{VERSION}/YOUR_PACKAGE_NAME_INSTALLER_FILE.unitypackage"
+        Pattern     = "https://github\.com/Saesentsessis/Unity-Collections-Specialized/releases/download/[\d\.]+/Unity-Collections-Specialized-Installer\.unitypackage"
+        Replace     = "https://github.com/Saesentsessis/Unity-Collections-Specialized/releases/download/{VERSION}/Unity-Collections-Specialized-Installer.unitypackage"
         Description = "Repository README download URL"
     }
 )
@@ -82,7 +82,7 @@ function Test-SemanticVersion {
 
 function Get-CurrentVersion {
     # Extract current version from package.json
-    $packageJsonPath = "Unity-Package/Assets/root/package.json"
+    $packageJsonPath = "Unity-Collections-Specialized/Assets/root/package.json"
     if (-not (Test-Path $packageJsonPath)) {
         throw "Could not find package.json at: $packageJsonPath"
     }
@@ -104,7 +104,7 @@ function Update-VersionFiles {
         $fullPath = $file.Path
 
         if (-not (Test-Path $fullPath)) {
-            Write-ColorText "⚠️  File not found: $($file.Path)" "Yellow"
+            Write-ColorText "??  File not found: $($file.Path)" "Yellow"
             continue
         }
 
@@ -130,28 +130,28 @@ function Update-VersionFiles {
                 OriginalContent = $originalContent
             }
 
-            Write-ColorText "📝 $($file.Description): $($regexMatches.Count) occurrence(s)" "Green"
+            Write-ColorText "?? $($file.Description): $($regexMatches.Count) occurrence(s)" "Green"
 
             # Show the actual changes
             foreach ($match in $regexMatches) {
                 $newValue = $match.Value -replace $file.Pattern, $replacement
-                Write-ColorText "   $($match.Value) → $newValue" "Gray"
+                Write-ColorText "   $($match.Value) > $newValue" "Gray"
             }
         }
         else {
-            Write-ColorText "⚠️  No matches found in: $($file.Path)" "Yellow"
+            Write-ColorText "??  No matches found in: $($file.Path)" "Yellow"
             Write-ColorText "   Pattern: $($file.Pattern)" "Gray"
         }
     }
 
     if ($changes.Count -eq 0) {
-        Write-ColorText "❌ No version references found to update!" "Red"
+        Write-ColorText "? No version references found to update!" "Red"
         Pop-Location
         exit 1
     }
 
     if ($PreviewOnly) {
-        Write-ColorText "`n📋 Preview Summary:" "Cyan"
+        Write-ColorText "`n?? Preview Summary:" "Cyan"
         Write-ColorText "Files to be modified: $($changes.Count)" "White"
         Write-ColorText "Total replacements: $(($changes | Measure-Object -Property Matches -Sum).Sum)" "White"
         return $null
@@ -168,12 +168,12 @@ function Update-VersionFiles {
 
 # Main execution
 try {
-    Write-ColorText "🚀 Package Version Bump Script" "Cyan"
+    Write-ColorText "?? Package Version Bump Script" "Cyan"
     Write-ColorText "=================================" "Cyan"
 
     # Validate semantic version format
     if (-not (Test-SemanticVersion $NewVersion)) {
-        Write-ColorText "❌ Invalid semantic version format: $NewVersion" "Red"
+        Write-ColorText "? Invalid semantic version format: $NewVersion" "Red"
         Write-ColorText "Expected format: major.minor.patch (e.g., '1.2.3')" "Yellow"
         Pop-Location
         exit 1
@@ -181,38 +181,38 @@ try {
 
     # Get current version
     $currentVersion = Get-CurrentVersion
-    Write-ColorText "📋 Current version: $currentVersion" "White"
-    Write-ColorText "📋 New version: $NewVersion" "White"
+    Write-ColorText "?? Current version: $currentVersion" "White"
+    Write-ColorText "?? New version: $NewVersion" "White"
 
     if ($currentVersion -eq $NewVersion) {
-        Write-ColorText "⚠️  New version is the same as current version" "Yellow"
+        Write-ColorText "??  New version is the same as current version" "Yellow"
         Pop-Location
         exit 0
     }
 
-    Write-ColorText "`n🔍 Scanning for version references..." "Cyan"
+    Write-ColorText "`n?? Scanning for version references..." "Cyan"
 
     # Update version files
     $changes = Update-VersionFiles -OldVersion $currentVersion -NewVersion $NewVersion -PreviewOnly $WhatIf
 
     if ($WhatIf) {
-        Write-ColorText "`n✅ Preview completed. Use without -WhatIf to apply changes." "Green"
+        Write-ColorText "`n? Preview completed. Use without -WhatIf to apply changes." "Green"
         Pop-Location
         exit 0
     }
 
     if ($changes -and $changes.Count -gt 0) {
-        Write-ColorText "`n🎉 Version bump completed successfully!" "Green"
+        Write-ColorText "`n?? Version bump completed successfully!" "Green"
         Write-ColorText "   Updated $($changes.Count) files" "White"
         Write-ColorText "   Total replacements: $(($changes | Measure-Object -Property Matches -Sum).Sum)" "White"
-        Write-ColorText "   Version: $currentVersion → $NewVersion" "White"
-        Write-ColorText "`n💡 Remember to commit these changes to git" "Cyan"
+        Write-ColorText "   Version: $currentVersion > $NewVersion" "White"
+        Write-ColorText "`n?? Remember to commit these changes to git" "Cyan"
     }
 
     Pop-Location
 }
 catch {
-    Write-ColorText "`n❌ Script failed: $($_.Exception.Message)" "Red"
+    Write-ColorText "`n? Script failed: $($_.Exception.Message)" "Red"
     Pop-Location
     exit 1
 }
