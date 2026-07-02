@@ -128,7 +128,7 @@ Or manually add the scoped registry to your `Packages/manifest.json`:
 ### Method 2: Unity package installer
 
 1. Download the latest `.unitypackage` from [GitHub Releases page](https://github.com/Saesentsessis/Unity-Collections-Specialized/releases).
-   - _Direct Link:_ [Unity-Collections-Specialized-Installer.unitypackage](https://github.com/Saesentsessis/Unity-Collections-Specialized/releases/download/0.1.0/Unity-Collections-Specialized-Installer.unitypackage)
+   - _Direct Link:_ [Unity-Collections-Specialized-Installer.unitypackage](https://github.com/Saesentsessis/Unity-Collections-Specialized/releases/download/0.1.1/Unity-Collections-Specialized-Installer.unitypackage)
 2. Import the downloaded package into your Unity project.
 3. The installer will automatically configure OpenUPM in your `manifest.json` file and install the package dependencies.
 

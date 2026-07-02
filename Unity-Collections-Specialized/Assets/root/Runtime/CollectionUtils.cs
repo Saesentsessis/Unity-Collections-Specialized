@@ -63,6 +63,18 @@ namespace Unity.Collections.Specialized
         {
             return value;
         }
+
+        /// <summary>
+        /// Tell Burst that a long can be assumed to map to an always positive value.
+        /// </summary>
+        /// <param name="value">The long that is always positive.</param>
+        /// <returns>Returns `x`, but allows the compiler to assume it is always positive.</returns>
+        [return: AssumeRange(0L, long.MaxValue)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static long AssumePositive(long value)
+        {
+            return value;
+        }
         
         [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
         public static void CheckAllocator(AllocatorManager.AllocatorHandle allocator)

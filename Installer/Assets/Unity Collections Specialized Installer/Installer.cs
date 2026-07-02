@@ -16,7 +16,7 @@ namespace Unity.Collections.Specialized.Installer
     public static partial class Installer
     {
         public const string PackageId = "com.saesentsessis.unity-collections-specialized";
-        public const string Version = "0.1.0";
+        public const string Version = "0.1.1";
 
         static Installer()
         {
