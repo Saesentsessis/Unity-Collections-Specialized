@@ -19,6 +19,7 @@ namespace Unity.Collections.Specialized.Installer
 
         static Installer()
         {
+            if (Application.isBatchMode) return;
             AddScopedRegistryIfNeeded(ManifestPath);
         }
     }
