@@ -8,9 +8,7 @@
 */
 #nullable enable
 using System.IO;
-using System.Linq;
 using UnityEngine;
-using Unity.Collections.Specialized.Installer.SimpleJSON;
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("Unity.Collections.Specialized.Installer.Tests")]

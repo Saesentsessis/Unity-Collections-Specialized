@@ -20,8 +20,9 @@ namespace Unity.Collections.Specialized.Installer
 
         static Installer()
         {
-            if (Application.isBatchMode) return;
+#if !IVAN_MURZAK_INSTALLER_PROJECT
             AddScopedRegistryIfNeeded(ManifestPath);
+#endif
         }
     }
 }

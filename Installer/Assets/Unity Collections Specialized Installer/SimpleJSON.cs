@@ -40,7 +40,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text;
 
-namespace Unity.Collections.Specialized.Installer.SimpleJSON
+namespace Unity.Collections.Specialized.Installer
 {
     public enum JSONNodeType
     {
