@@ -8,6 +8,7 @@
 */
 
 using UnityEditor;
+using UnityEngine;
 
 namespace Unity.Collections.Specialized.Installer
 {
