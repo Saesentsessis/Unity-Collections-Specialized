@@ -69,7 +69,7 @@ list.Dispose();
 
 ### Managed Usage
 
-If you need the stable-index paradigm outside of native memory allocations.
+If you need the stable-index paradigm outside of native memory applications.
 
 ```csharp
 using Unity.Collections;
@@ -93,7 +93,7 @@ list.Dispose();
 ## Requirements
 
 - Unity **2021.3** or newer
-- [`com.unity.collections`](https://docs.unity3d.com/Packages/com.unity.collections@latest) **1.5.0** or newer
+- [`com.unity.collections`](https://docs.unity3d.com/Packages/com.unity.collections@latest) **2.1.4** or newer
 - [`com.unity.burst`](https://docs.unity3d.com/Packages/com.unity.burst@latest) **1.8.0** or newer
 
 ## Installation
@@ -134,4 +134,4 @@ Or manually add the scoped registry to your `Packages/manifest.json`:
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Licensed under [MIT License](./LICENSE).
