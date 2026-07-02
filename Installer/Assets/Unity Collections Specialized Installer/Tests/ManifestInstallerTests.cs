@@ -17,8 +17,8 @@ namespace Unity.Collections.Specialized.Installer.Tests
     {
         const string PackageIdTag = "PACKAGE_ID";
         const string PackageVersionTag = "PACKAGE_VERSION";
-        const string FilesRoot = "Assets/Unity SoA Generator Installer/Tests/Files";
-        const string FilesCopyRoot = "Temp/Unity SoA Generator Installer/Tests/Files";
+        const string FilesRoot = "Assets/Unity Collections Specialized Installer/Tests/Files";
+        const string FilesCopyRoot = "Temp/Unity Collections Specialized Installer/Tests/Files";
         static string CorrectManifestPath => $"{FilesRoot}/Correct/correct_manifest.json";
 
         [SetUp]
