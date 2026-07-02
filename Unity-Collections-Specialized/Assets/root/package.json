@@ -1,0 +1,22 @@
+{
+    "name": "com.saesentsessis.unity-collections-specialized",
+    "displayName": "Unity Collections Specialized",
+    "author": {
+        "name": "Saesentsessis",
+        "url": "https://github.com/Saesentsessis"
+    },
+    "keywords": [
+        "Native",
+        "Collections",
+        "Low Level",
+        "Stable Index",
+        "Burst"
+    ],
+    "version": "0.1.0",
+    "unity": "2021.3",
+    "description": "Specialized collection types with stable index handles for Unity.Collections and Burst, including StableIndexList, NativeStableIndexList, and UnsafeStableIndexList.",
+    "dependencies": {
+        "com.unity.collections": "2.0.0",
+        "com.unity.burst": "1.8.0"
+    }
+}
