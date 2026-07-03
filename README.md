@@ -49,6 +49,7 @@ critical sections, where the caller can already assure the handle validity.
 Ideal for integration into the Unity Job System with standard safety checks.
 
 ```csharp
+using UnityEngine;
 using Unity.Collections;
 using Unity.Collections.Specialized;
 
@@ -62,12 +63,13 @@ var handle = list.Add(42);
 if (list.IsValid(handle))
     Debug.Log(list[handle]); // 42
 
+// Don't forget to release unmanaged memory.
 list.Dispose();
 ```
 
 ### Managed Usage
 
-If you need the stable-index paradigm outside of native memory allocations.
+If you need the stable-index paradigm outside of native memory applications.
 
 ```csharp
 using Unity.Collections;
@@ -91,7 +93,7 @@ list.Dispose();
 ## Requirements
 
 - Unity **2021.3** or newer
-- [`com.unity.collections`](https://docs.unity3d.com/Packages/com.unity.collections@latest) **2.0.0** or newer
+- [`com.unity.collections`](https://docs.unity3d.com/Packages/com.unity.collections@latest) **2.1.4** or newer
 - [`com.unity.burst`](https://docs.unity3d.com/Packages/com.unity.burst@latest) **1.8.0** or newer
 
 ## Installation
@@ -109,7 +111,7 @@ Or manually add the scoped registry to your `Packages/manifest.json`:
 ```json
 {
   "dependencies": {
-    "com.saesentsessis.unity-collections-specialized": "0.1.0"
+    "com.saesentsessis.unity-collections-specialized": "0.1.1"
   },
   "scopedRegistries": [
     {

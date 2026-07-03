@@ -111,7 +111,7 @@ Or manually add the scoped registry to your `Packages/manifest.json`:
 ```json
 {
   "dependencies": {
-    "com.saesentsessis.unity-collections-specialized": "0.1.0"
+    "com.saesentsessis.unity-collections-specialized": "0.1.1"
   },
   "scopedRegistries": [
     {
