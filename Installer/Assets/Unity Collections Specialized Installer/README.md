@@ -72,4 +72,4 @@ Run them via **Test Runner** in the Installer Unity project.
 
 ## License
 
-MIT — see `[Unity-Collections-Specialized/Assets/root/LICENSE](../../../../Unity-Collections-Specialized/Assets/root/LICENSE)`.
+Licensed under [MIT LICENSE](../../../../main/LICENSE).
