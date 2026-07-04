@@ -1,4 +1,15 @@
-# Unity Collections Specialized
+<div align="center">
+    <h1>Unity Collections Specialized</h1>
+
+[![OpenUPM](https://img.shields.io/npm/v/com.saesentsessis.unity-collections-specialized?label=OpenUPM&registry_uri=https://package.openupm.com&labelColor=333A41 'OpenUPM package')](https://openupm.com/packages/com.saesentsessis.unity-collections-specialized/)
+[![Unity Editor](https://img.shields.io/badge/Editor-X?style=flat&logo=unity&labelColor=333A41&color=2A2A2A 'Unity Editor supported')](https://unity.com/releases/editor/archive)
+[![Unity Runtime](https://img.shields.io/badge/Runtime-X?style=flat&logo=unity&labelColor=333A41&color=2A2A2A 'Unity Runtime supported')](https://unity.com/releases/editor/archive)
+[![Tests Passed](https://github.com/Saesentsessis/Unity-Collections-Specialized/actions/workflows/release.yml/badge.svg 'Tests Passed')](https://github.com/Saesentsessis/Unity-Collections-Specialized/actions/workflows/release.yml)<br/>
+[![Releases](https://img.shields.io/github/release/Saesentsessis/Unity-Collections-Specialized.svg)](https://github.com/Saesentsessis/Unity-Collections-Specialized/releases)
+[![Stars](https://img.shields.io/github/stars/Saesentsessis/Unity-Collections-Specialized 'Stars')](https://github.com/Saesentsessis/Unity-Collections-Specialized/stargazers)
+[![License](https://img.shields.io/github/license/Saesentsessis/Unity-Collections-Specialized?label=License&labelColor=333A41)](https://github.com/Saesentsessis/Unity-Collections-Specialized/blob/main/LICENSE)
+
+</div>
 
 _A custom-made, third-party package for High-Performance C# (HPC#). Not affiliated with or endorsed by Unity Technologies._
 
@@ -13,7 +24,7 @@ iteration.
 ### Generation-Safe Stable Handles
 
 Instead of standard integer indices, `Add` operations return a `StableIndexHandle`
-consisting of stable ID and generation version. When an element is removed and it's
+consisting of a stable ID and a generation version. When an element is removed and its
 slot is later reused, the version increments. This guarantees that old, stale handles
 cannot accidentally alias newly inserted data.
 
@@ -118,7 +129,7 @@ Or manually add the scoped registry to your `Packages/manifest.json`:
       "name": "OpenUPM",
       "url": "https://package.openupm.com",
       "scopes": [
-        "com.saesentsessis.unity-collections-specialized"
+        "com.saesentsessis"
       ]
     }
   ]
@@ -134,18 +145,18 @@ Or manually add the scoped registry to your `Packages/manifest.json`:
 
 ### Method 3: Manual installation
 
-1. Open `Package Manager` window.
-2. Click on the `+` icon.
-3. Select **Install from git URL...** and paste this link:
-
+1. Open Unity and navigate to `Window` -> `Package Manager`.
+2. Click on the `+` icon in the top left corner and select `Add package from git URL...`.
+3. Enter the following URL:
 ```txt
 https://github.com/Saesentsessis/Unity-Collections-Specialized.git?path=Unity-Collections-Specialized/Assets/root
 ```
+4. Click Add.
 
 You can specify exact release version of this package like this:
 
 ```txt
-https://github.com/Saesentsessis/Unity-Collections-Specialized.git?path=Unity-Collections-Specialized/Assets/root#0.1.0
+https://github.com/Saesentsessis/Unity-Collections-Specialized.git?path=Unity-Collections-Specialized/Assets/root#0.1.1
 ```
 
 ## License
