@@ -44,6 +44,17 @@ By deliberately omitting mandatory bounds and version-checking during the actual
 `list[handle]` retrieval, the API guarantees **zero-overhead access** in performance
 critical sections, where the caller can already assure the handle validity.
 
+Native and managed `Remove` still validate handles when
+`ENABLE_UNITY_COLLECTIONS_CHECKS` is enabled. Unsafe `Remove` does not.
+
+### Length and Resize growth
+
+On `UnsafeStableIndexList<T>`, growing via `Length` or `Resize` mints stable-index
+metadata and sparse IDs for each new dense slot (same rules as `Add`). Shrinking
+truncates the dense length; handles into truncated slots fail `IsValid` via bounds.
+Prefer `Add` / `Remove` for normal handle-oriented lifecycle; use `Length` /
+`Resize` when you need bulk dense sizing with handle-consistent slots.
+
 ## Key types
 
 | Type                       | Description                                                           |
@@ -52,6 +63,16 @@ critical sections, where the caller can already assure the handle validity.
 | `NativeStableIndexList<T>` | Native container with safety handles and job-safe disposal            |
 | `UnsafeStableIndexList<T>` | Unmanaged pointer-based list for Burst and low-level code             |
 | `StableIndexHandle`        | Generation-safe handle; stale after the referenced element is removed |
+
+Managed and native/unsafe variants expose `Length` (element count) and `Capacity`
+(allocated slots). Prefer `Length` for sizing checks.
+
+## Migrating from 0.1.x
+
+| Change | Action |
+|--------|--------|
+| `StableIndexList<T>.Count` | Rename usages to `.Length` |
+| Optional managed parity | `IsCreated`, `IsEmpty`, dense `this[int]`, `Clear()`, `SetCapacity`, `TrimExcess` are available |
 
 ## Usage Examples
 
@@ -73,6 +94,8 @@ var handle = list.Add(42);
 // Validate and access.
 if (list.IsValid(handle))
     Debug.Log(list[handle]); // 42
+
+Debug.Log(list.Length); // 1
 
 // Don't forget to release unmanaged memory.
 list.Dispose();
@@ -96,6 +119,9 @@ if (list.IsValid(handle))
 {
     // ...
 }
+
+list.Clear(); // resets Length and ID pool
+Debug.Log(list.Length); // 0
 
 // Don't forget to release unmanaged memory.
 list.Dispose();
@@ -122,7 +148,7 @@ Or manually add the scoped registry to your `Packages/manifest.json`:
 ```json
 {
   "dependencies": {
-    "com.saesentsessis.unity-collections-specialized": "0.1.1"
+    "com.saesentsessis.unity-collections-specialized": "0.2.0"
   },
   "scopedRegistries": [
     {
@@ -139,7 +165,7 @@ Or manually add the scoped registry to your `Packages/manifest.json`:
 ### Method 2: Unity package installer
 
 1. Download the latest `.unitypackage` from [GitHub Releases page](https://github.com/Saesentsessis/Unity-Collections-Specialized/releases).
-   - _Direct Link:_ [Unity-Collections-Specialized-Installer.unitypackage](https://github.com/Saesentsessis/Unity-Collections-Specialized/releases/download/0.1.1/Unity-Collections-Specialized-Installer.unitypackage)
+   - _Direct Link:_ [Unity-Collections-Specialized-Installer.unitypackage](https://github.com/Saesentsessis/Unity-Collections-Specialized/releases/download/0.2.0/Unity-Collections-Specialized-Installer.unitypackage)
 2. Import the downloaded package into your Unity project.
 3. The installer will automatically configure OpenUPM in your `manifest.json` file and install the package dependencies.
 
@@ -156,7 +182,7 @@ https://github.com/Saesentsessis/Unity-Collections-Specialized.git?path=Unity-Co
 You can specify exact release version of this package like this:
 
 ```txt
-https://github.com/Saesentsessis/Unity-Collections-Specialized.git?path=Unity-Collections-Specialized/Assets/root#0.1.1
+https://github.com/Saesentsessis/Unity-Collections-Specialized.git?path=Unity-Collections-Specialized/Assets/root#0.2.0
 ```
 
 ## License

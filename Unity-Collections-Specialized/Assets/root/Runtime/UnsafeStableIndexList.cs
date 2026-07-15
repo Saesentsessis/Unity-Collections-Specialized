@@ -1,13 +1,4 @@
-﻿/*
-┌────────────────────────────────────────────────────────────────────────────┐
-│  Unity Collections Specialized                                             │
-│  Custom-made third-party package — not affiliated with or endorsed by      │
-│  Unity Technologies.                                                       │
-│  Repository: https://github.com/Saesentsessis/Unity-Collections-Specialized│
-└────────────────────────────────────────────────────────────────────────────┘
-*/
-
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -19,7 +10,7 @@ using Unity.Mathematics;
 namespace Unity.Collections.Specialized
 {
     [BurstCompile(DisableSafetyChecks = true)]
-    public unsafe struct UnsafeStableListDisposeJob : IJob
+    public unsafe struct UnsafeStableIndexListDisposeJob : IJob
     {
         [NativeDisableUnsafePtrRestriction]
         public void* DataPtr;
@@ -78,8 +69,10 @@ namespace Unity.Collections.Specialized
         /// <summary>
         /// Sparse storage for Indices.
         /// Maps: ID -> Dense Index.
+        /// Offset is capacity * (sizeof(StableIndexMetadata) / sizeof(int)) because
+        /// meta and indices share one SoA allocation: [Meta × capacity][Indices × capacity].
         /// </summary>
-        public int* IndicesPtr => (int*)_metaAndIndicesPtr + (m_capacity + m_capacity);
+        public int* IndicesPtr => (int*)_metaAndIndicesPtr + m_capacity * (sizeof(StableIndexMetadata) / sizeof(int));
 
         /// <summary>
         /// The number of elements.
@@ -138,10 +131,18 @@ namespace Unity.Collections.Specialized
 
             set
             {
-                if (value > m_capacity)
-                    Resize(value);
-                else
+                if (value < 0)
+                    throw new ArgumentOutOfRangeException(nameof(value), "Length must be non-negative.");
+
+                // Shrink: truncate dense length. Handles past the new length fail IsValid via bounds.
+                if (value <= m_length)
+                {
                     m_length = value;
+                    return;
+                }
+
+                // Grow: ensure capacity and mint stable IDs for every new dense slot.
+                Resize(value, NativeArrayOptions.UninitializedMemory);
             }
         }
         
@@ -290,12 +291,15 @@ namespace Unity.Collections.Specialized
         }
 
         /// <summary>
-        /// Sets the length to 0.
+        /// Resets length and ID capacity to 0 without zeroing allocated memory.
         /// </summary>
-        /// <remarks>Does not change the capacity.</remarks>
+        /// <remarks>
+        /// Does not change the capacity. All existing handles become invalid.
+        /// </remarks>
         public void Clear()
         {
             m_length = 0;
+            m_idCapacity = 0;
         }
         
         /// <summary>
@@ -311,25 +315,65 @@ namespace Unity.Collections.Specialized
         
         /// <summary>
         /// Sets the length, expanding the capacity if necessary.
+        /// Growing mints stable-index metadata and sparse IDs for each new dense slot
+        /// so handles remain consistent with <see cref="Add"/>.
         /// </summary>
         /// <param name="length">The new length.</param>
-        /// <param name="options">Whether newly allocated bytes should be zeroed out.</param>
+        /// <param name="options">Whether newly allocated data bytes should be zeroed out.</param>
+        /// <remarks>
+        /// ClearMemory zeroes <see cref="DataPtr"/> only for the grown range; meta/indices
+        /// are initialized by ID minting (clearing meta would destroy recycled reverse IDs).
+        /// Shrinking truncates length without walking versions.
+        /// </remarks>
         public void Resize(int length, NativeArrayOptions options = NativeArrayOptions.UninitializedMemory)
         {
-            long oldLength = m_length;
-            
+            if (length < 0)
+                throw new ArgumentOutOfRangeException(nameof(length), "Length must be non-negative.");
+
+            int oldLength = m_length;
+
             if (length > Capacity)
                 SetCapacity(length);
-            
-            m_length = length;
 
-            if ((options & NativeArrayOptions.ClearMemory) != NativeArrayOptions.ClearMemory || oldLength < length)
-                return;
-            
-            long num = length - oldLength;
-            UnsafeUtility.MemClear(DataPtr + oldLength, num * sizeof(T));
-            UnsafeUtility.MemClear(MetaPtr + oldLength, num * sizeof(StableIndexMetadata));
-            UnsafeUtility.MemClear(IndicesPtr + oldLength, num * sizeof(int));
+            if (length > oldLength)
+            {
+                if ((options & NativeArrayOptions.ClearMemory) == NativeArrayOptions.ClearMemory)
+                {
+                    long num = length - oldLength;
+                    UnsafeUtility.MemClear(DataPtr + oldLength, num * sizeof(T));
+                }
+
+                MintIdsForRange(oldLength, length);
+            }
+
+            m_length = length;
+        }
+
+        /// <summary>
+        /// Prepares meta + sparse index entries for dense slots [fromInclusive, toExclusive).
+        /// Mirrors <see cref="GetFreeSlot"/> recycle vs mint rules without writing element data.
+        /// </summary>
+        private void MintIdsForRange(int fromInclusive, int toExclusive)
+        {
+            for (int denseIndex = fromInclusive; denseIndex < toExclusive; denseIndex++)
+            {
+                if (m_idCapacity > denseIndex)
+                {
+                    ref StableIndexMetadata meta = ref MetaPtr[denseIndex];
+                    meta.Version++;
+                    IndicesPtr[meta.ReverseId] = denseIndex;
+                }
+                else
+                {
+                    int newId = m_idCapacity++;
+                    MetaPtr[denseIndex] = new StableIndexMetadata
+                    {
+                        ReverseId = newId,
+                        Version = 1,
+                    };
+                    IndicesPtr[newId] = denseIndex;
+                }
+            }
         }
         
         /// <summary>
@@ -386,7 +430,8 @@ namespace Unity.Collections.Specialized
 
                 if (m_capacity > 0)
                 {
-                    var itemsToCopy = math.min(newCapacity, Capacity);
+                    var oldCapacity = m_capacity;
+                    var itemsToCopy = math.min(newCapacity, oldCapacity);
                     
                     if (DataPtr != null)
                     {
@@ -394,10 +439,19 @@ namespace Unity.Collections.Specialized
                         UnsafeUtility.MemCpy(newDataPtr, DataPtr, bytesToCopy);
                     }
 
+                    // SoA layout: [Meta × capacity][Indices × capacity]. Copy each region
+                    // separately — the indices offset depends on capacity and moves on grow/shrink.
                     if (_metaAndIndicesPtr != null)
                     {
-                        var bytesToCopy = (long)itemsToCopy * PackedElementSize;
-                        UnsafeUtility.MemCpy(newMetaAndIndicesPtr, _metaAndIndicesPtr, bytesToCopy);
+                        var metaIntsPerElement = sizeof(StableIndexMetadata) / sizeof(int);
+                        var metaBytes = (long)itemsToCopy * sizeof(StableIndexMetadata);
+                        var indexBytes = (long)itemsToCopy * sizeof(int);
+
+                        UnsafeUtility.MemCpy(newMetaAndIndicesPtr, _metaAndIndicesPtr, metaBytes);
+
+                        var oldIndices = (int*)_metaAndIndicesPtr + oldCapacity * metaIntsPerElement;
+                        var newIndices = (int*)newMetaAndIndicesPtr + newCapacity * metaIntsPerElement;
+                        UnsafeUtility.MemCpy(newIndices, oldIndices, indexBytes);
                     }
                 }
             }
@@ -492,7 +546,7 @@ namespace Unity.Collections.Specialized
 
             if (CollectionUtils.ShouldDeallocate(Allocator))
             {
-                var jobHandle = new UnsafeStableListDisposeJob
+                var jobHandle = new UnsafeStableIndexListDisposeJob
                 {
                     DataPtr = DataPtr,
                     MetaIndicesPackedPtr = _metaAndIndicesPtr,

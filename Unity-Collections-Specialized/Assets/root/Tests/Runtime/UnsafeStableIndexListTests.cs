@@ -249,6 +249,34 @@ namespace Unity.Collections.Specialized.Tests
         }
 
         [Test]
+        public void Clear_InvalidatesExistingHandlesAndResetsIdPool()
+        {
+            var list = CreateList();
+            try
+            {
+                var first = list.Add(1);
+                var second = list.Add(2);
+
+                list.Clear();
+
+                Assert.IsFalse(list.IsValid(first));
+                Assert.IsFalse(list.IsValid(second));
+
+                var reused = list.Add(99);
+
+                // ID pool was reset, so the first reminted ID starts at 0 again.
+                Assert.AreEqual(0, reused.Index);
+                Assert.AreEqual(1, reused.Version);
+                Assert.IsTrue(list.IsValid(reused));
+                Assert.AreEqual(99, list[reused]);
+            }
+            finally
+            {
+                list.Dispose();
+            }
+        }
+
+        [Test]
         public void Clear_AllowsAddingAgain()
         {
             var list = CreateList();
@@ -323,6 +351,80 @@ namespace Unity.Collections.Specialized.Tests
                 Assert.GreaterOrEqual(list.Capacity, 5);
                 Assert.AreEqual(0, list[0]);
                 Assert.AreEqual(0, list[4]);
+            }
+            finally
+            {
+                list.Dispose();
+            }
+        }
+
+        [Test]
+        public unsafe void Length_Grow_MintsHandlesForNewSlots()
+        {
+            var list = CreateList();
+            try
+            {
+                list.Length = 3;
+
+                Assert.AreEqual(3, list.Length);
+
+                for (var dense = 0; dense < 3; dense++)
+                {
+                    var reverseId = list.MetaPtr[dense].ReverseId;
+                    var version = list.MetaPtr[dense].Version;
+                    var handle = new StableIndexHandle(reverseId, version);
+
+                    Assert.IsTrue(list.IsValid(handle), $"Dense slot {dense} should have a valid handle.");
+                    Assert.AreEqual(dense, list.IndicesPtr[reverseId]);
+                }
+            }
+            finally
+            {
+                list.Dispose();
+            }
+        }
+
+        [Test]
+        public void Length_SetSmaller_TruncatesWithoutThrowing()
+        {
+            var list = CreateList();
+            try
+            {
+                list.Add(1);
+                list.Add(2);
+                list.Add(3);
+
+                list.Length = 1;
+
+                Assert.AreEqual(1, list.Length);
+                Assert.AreEqual(1, list[0]);
+            }
+            finally
+            {
+                list.Dispose();
+            }
+        }
+
+        [Test]
+        public unsafe void Resize_Grow_ClearMemory_MintsAndZeroesData()
+        {
+            var list = CreateList();
+            try
+            {
+                list.Add(42);
+                list.Resize(4, NativeArrayOptions.ClearMemory);
+
+                Assert.AreEqual(4, list.Length);
+                Assert.AreEqual(42, list[0]);
+                Assert.AreEqual(0, list[1]);
+                Assert.AreEqual(0, list[2]);
+                Assert.AreEqual(0, list[3]);
+
+                for (var dense = 1; dense < 4; dense++)
+                {
+                    var handle = new StableIndexHandle(list.MetaPtr[dense].ReverseId, list.MetaPtr[dense].Version);
+                    Assert.IsTrue(list.IsValid(handle));
+                }
             }
             finally
             {

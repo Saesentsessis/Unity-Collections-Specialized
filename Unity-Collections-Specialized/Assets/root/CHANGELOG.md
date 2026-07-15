@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-07-15
+
+### Added
+
+- `StableIndexList<T>.Clear()` — resets length and ID pool; clears managed `T[]` for GC without zeroing unmanaged buffers.
+- Managed API parity: `IsCreated`, `IsEmpty`, dense `this[int]`, `SetCapacity`, `TrimExcess`.
+- `CollectionUtils.CheckHandleValid` — debug-only handle validation under `ENABLE_UNITY_COLLECTIONS_CHECKS`.
+- Growing `UnsafeStableIndexList` via `Length` / `Resize` now mints stable IDs and metadata for each new dense slot (same recycle/mint rules as `Add`).
+
+### Changed
+
+- **Breaking:** `StableIndexList<T>.Count` renamed to `Length` to match Native/Unsafe and `INativeList<T>`.
+  - **Migration:** replace `list.Count` with `list.Length`.
+- `Clear()` on Unsafe/Native resets both `m_length` and `m_idCapacity` (invalidates all prior handles) without MemClear.
+- Native handle indexer uses `CheckWriteAndThrow` without bumping the secondary safety version (keeps `AsArray()` secondary views valid across handle `ref` access).
+- Native/managed `Remove` validates handles in development builds (`ENABLE_UNITY_COLLECTIONS_CHECKS`); Unsafe `Remove` stays unchecked (zero-overhead).
+- `NativeStableIndexList` now creates a `DisposeSentinel` and aligns `UntypedNativeStableList` layout with `UnsafeStableIndexList`.
+- Dispose job helpers renamed to `NativeStableIndexListDispose` / `NativeStableIndexListDisposeJob` and `UnsafeStableIndexListDisposeJob`.
+
+### Fixed
+
+- SoA grow path in `UnsafeStableIndexList.ResizeExact` — meta and indices regions are copied separately (capacity-dependent indices offset).
+- Managed `StableIndexList.Reallocate` now allocates/frees with the instance `_allocator` (no longer hardcodes `Allocator.Persistent`).
+- `Resize(..., ClearMemory)` grows correctly; clears newly added `DataPtr` only (does not wipe recycled metadata).
+
+### Removed
+
+- ASCII provenance banners from Runtime sources (covered by LICENSE / README).
+
 ## [0.1.1] - 2026-07-02
 
 ### Added
@@ -30,5 +59,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `StableIndexHandle` for generation-safe references into collections.
 - Dependencies on `com.unity.collections` 2.0.0 and `com.unity.burst` 1.8.0.
 
+[0.2.0]: https://github.com/Saesentsessis/Unity-Collections-Specialized/compare/0.1.1...0.2.0
 [0.1.1]: https://github.com/Saesentsessis/Unity-Collections-Specialized/compare/0.1.0...0.1.1
 [0.1.0]: https://github.com/Saesentsessis/Unity-Collections-Specialized/releases/tag/0.1.0
