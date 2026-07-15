@@ -1,13 +1,4 @@
-﻿/*
-┌────────────────────────────────────────────────────────────────────────────┐
-│  Unity Collections Specialized                                             │
-│  Custom-made third-party package — not affiliated with or endorsed by      │
-│  Unity Technologies.                                                       │
-│  Repository: https://github.com/Saesentsessis/Unity-Collections-Specialized│
-└────────────────────────────────────────────────────────────────────────────┘
-*/
-
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -18,7 +9,7 @@ using Unity.Jobs;
 namespace Unity.Collections.Specialized
 {
     [NativeContainer]
-    public unsafe struct NativeStableListDispose
+    public unsafe struct NativeStableIndexListDispose
     {
         [NativeDisableUnsafePtrRestriction]
         public UntypedNativeStableList* ListData;
@@ -35,9 +26,9 @@ namespace Unity.Collections.Specialized
     }
 
     [BurstCompile]
-    public struct NativeStableListDisposeJob : IJob
+    public struct NativeStableIndexListDisposeJob : IJob
     {
-        public NativeStableListDispose Data;
+        public NativeStableIndexListDispose Data;
         
         public void Execute()
         {
@@ -49,22 +40,22 @@ namespace Unity.Collections.Specialized
     public unsafe struct UntypedNativeStableList
     {
 #pragma warning disable 169
-        // <WARNING>
-        // 'Header' of this struct must binary match `UntypedUnsafeList`, `UnsafeList`, `UnsafePtrList`, and `NativeArray` struct.
+        // Binary layout must match UnsafeStableIndexList<T> (T* is pointer-sized for all T):
+        // DataPtr, _metaAndIndicesPtr, m_length, m_capacity, m_idCapacity, Allocator
         [NativeDisableUnsafePtrRestriction]
         public readonly void* DataPtr;
-        public readonly int m_length;
-        public readonly int m_capacity;
-        public readonly AllocatorManager.AllocatorHandle Allocator;
-        public readonly int padding;
         [NativeDisableUnsafePtrRestriction]
         public readonly void* MetaAndIndicesPtr;
+        public readonly int m_length;
+        public readonly int m_capacity;
+        public readonly int m_idCapacity;
+        public readonly AllocatorManager.AllocatorHandle Allocator;
 #pragma warning restore 169
     }
     
     [StructLayout(LayoutKind.Sequential)]
     [NativeContainer]
-    [DebuggerDisplay("Length = {_listData == null ? default : _listData->m_Length}")]
+    [DebuggerDisplay("Length = {_listData == null ? default : _listData->m_length}")]
     public struct NativeStableIndexList<T> : IDisposable, IEquatable<NativeStableIndexList<T>> where T : unmanaged
     {
         private unsafe UnsafeStableIndexList<T>* _listData;
@@ -73,6 +64,9 @@ namespace Unity.Collections.Specialized
         // ReSharper disable once InconsistentNaming
         // The AtomicSafetyHandle field must be named exactly 'm_Safety'.
         internal AtomicSafetyHandle m_Safety;
+        
+        // ReSharper disable once InconsistentNaming
+        internal DisposeSentinel m_DisposeSentinel;
         
         // ReSharper disable once InconsistentNaming
         // Statically register this type with the safety system, using a name derived from the type itself
@@ -87,16 +81,11 @@ namespace Unity.Collections.Specialized
             *_listData = new UnsafeStableIndexList<T>(capacity, allocator, options);
 
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
-            // Create the AtomicSafetyHandle and DisposeSentinel
-            m_Safety = AtomicSafetyHandle.Create();
+            DisposeSentinel.Create(out m_Safety, out m_DisposeSentinel, 1, allocator);
 
-            // Set the safety ID on the AtomicSafetyHandle so that error messages describe this container type properly.
             AtomicSafetyHandle.SetStaticSafetyId(ref m_Safety, s_staticSafetyId);
-        
-            // Automatically bump the secondary version any time this container is scheduled for writing in a job
             AtomicSafetyHandle.SetBumpSecondaryVersionOnScheduleWrite(m_Safety, true);
 
-            // Check if this is a nested container, and if so, set the nested container flag
             if (UnsafeUtility.IsNativeContainerType<T>()) 
                 AtomicSafetyHandle.SetNestedContainer(m_Safety, true);
 #endif
@@ -197,6 +186,7 @@ namespace Unity.Collections.Specialized
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
             AtomicSafetyHandle.CheckWriteAndBumpSecondaryVersion(m_Safety);
 #endif
+            CollectionUtils.CheckHandleValid(_listData->IsValid(in handle), handle);
             _listData->Remove(in handle);
         }
         
@@ -210,9 +200,11 @@ namespace Unity.Collections.Specialized
         }
         
         /// <summary>
-        /// Sets the length to 0.
+        /// Resets length and ID capacity to 0 without zeroing allocated memory.
         /// </summary>
-        /// <remarks>Does not change the capacity.</remarks>
+        /// <remarks>
+        /// Does not change the capacity. All existing handles become invalid.
+        /// </remarks>
         public unsafe void Clear()
         {
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
@@ -247,11 +239,7 @@ namespace Unity.Collections.Specialized
                 return;
 
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
-#if UNITY_6000_0_OR_NEWER
-            CollectionHelper.DisposeSafetyHandle(ref m_Safety);
-#else
-            CollectionUtils.DisposeSafetyHandle(ref m_Safety);
-#endif
+            DisposeSentinel.Dispose(ref m_Safety, ref m_DisposeSentinel);
 #endif
             UnsafeStableIndexList<T>.Destroy(_listData);
             _listData = null;
@@ -272,9 +260,12 @@ namespace Unity.Collections.Specialized
                 return inputDeps;
 
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
-            var jobHandle = new NativeStableListDisposeJob
+            // DisposeSentinel must be cleared on the main thread; memory free can run in the job.
+            DisposeSentinel.Clear(ref m_DisposeSentinel);
+
+            var jobHandle = new NativeStableIndexListDisposeJob
             {
-                Data = new NativeStableListDispose
+                Data = new NativeStableIndexListDispose
                 {
                     ListData = (UntypedNativeStableList*)_listData,
                     m_Safety = m_Safety
@@ -282,9 +273,9 @@ namespace Unity.Collections.Specialized
             }.Schedule(inputDeps);
             AtomicSafetyHandle.Release(m_Safety);
 #else
-            var jobHandle = new NativeStableListDisposeJob
+            var jobHandle = new NativeStableIndexListDisposeJob
             {
-                Data = new NativeStableListDispose
+                Data = new NativeStableIndexListDispose
                 {
                     ListData = (UntypedNativeStableList*)_listData
                 }
@@ -324,13 +315,18 @@ namespace Unity.Collections.Specialized
         /// </summary>
         /// <param name="handle">A handle.</param>
         /// <value>The element of that handle.</value>
+        /// <remarks>
+        /// Returns a writable <c>ref</c>. Safety uses <see cref="AtomicSafetyHandle.CheckWriteAndThrow"/>
+        /// without bumping the secondary version, so existing <see cref="AsArray"/> views stay valid
+        /// across handle access. Structural mutations (Add/Remove/Clear/dense set) still bump.
+        /// </remarks>
         public unsafe ref T this[in StableIndexHandle handle]
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get
             {
 #if ENABLE_UNITY_COLLECTIONS_CHECKS
-                AtomicSafetyHandle.CheckWriteAndBumpSecondaryVersion(m_Safety);
+                AtomicSafetyHandle.CheckWriteAndThrow(m_Safety);
 #endif
                 return ref _listData->ElementAt(in handle);
             }

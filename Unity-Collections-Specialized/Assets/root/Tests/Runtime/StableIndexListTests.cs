@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using NUnit.Framework;
 using Unity.Collections;
@@ -7,13 +8,15 @@ namespace Unity.Collections.Specialized.Tests
     public class StableIndexListTests
     {
         [Test]
-        public void EmptyList_HasZeroCountAndMinimumCapacity()
+        public void EmptyList_HasZeroLengthAndMinimumCapacity()
         {
             var list = new StableIndexList<int>(Allocator.Temp);
 
             try
             {
-                Assert.AreEqual(0, list.Count);
+                Assert.IsTrue(list.IsCreated);
+                Assert.IsTrue(list.IsEmpty);
+                Assert.AreEqual(0, list.Length);
                 Assert.GreaterOrEqual(list.Capacity, 1);
                 Assert.IsTrue(list.Data.IsEmpty);
             }
@@ -45,13 +48,14 @@ namespace Unity.Collections.Specialized.Tests
 
             var handle = list.Add(42);
 
-            Assert.AreEqual(1, list.Count);
+            Assert.AreEqual(1, list.Length);
             Assert.IsTrue(list.IsValid(handle));
             Assert.AreEqual(42, list[handle]);
+            Assert.AreEqual(42, list[0]);
         }
 
         [Test]
-        public void Add_MultipleElements_IncrementsCountAndPreservesValues()
+        public void Add_MultipleElements_IncrementsLengthAndPreservesValues()
         {
             using var list = CreateList();
 
@@ -59,10 +63,13 @@ namespace Unity.Collections.Specialized.Tests
             var second = list.Add(20);
             var third = list.Add(30);
 
-            Assert.AreEqual(3, list.Count);
+            Assert.AreEqual(3, list.Length);
             Assert.AreEqual(10, list[first]);
             Assert.AreEqual(20, list[second]);
             Assert.AreEqual(30, list[third]);
+            Assert.AreEqual(10, list[0]);
+            Assert.AreEqual(20, list[1]);
+            Assert.AreEqual(30, list[2]);
         }
 
         [Test]
@@ -78,6 +85,18 @@ namespace Unity.Collections.Specialized.Tests
         }
 
         [Test]
+        public void DenseIndexer_Set_UpdatesValueAtIndex()
+        {
+            using var list = CreateList();
+
+            list.Add(1);
+            list.Add(2);
+            list[1] = 99;
+
+            Assert.AreEqual(99, list[1]);
+        }
+
+        [Test]
         public void Remove_MiddleElement_SwapBackPreservesRemainingHandles()
         {
             using var list = CreateList();
@@ -88,7 +107,7 @@ namespace Unity.Collections.Specialized.Tests
 
             list.Remove(first);
 
-            Assert.AreEqual(2, list.Count);
+            Assert.AreEqual(2, list.Length);
             Assert.IsFalse(list.IsValid(first));
             Assert.IsTrue(list.IsValid(second));
             Assert.IsTrue(list.IsValid(third));
@@ -107,7 +126,7 @@ namespace Unity.Collections.Specialized.Tests
 
             list.Remove(first);
 
-            Assert.AreEqual(1, list.Count);
+            Assert.AreEqual(1, list.Length);
             Assert.IsFalse(list.IsValid(first));
             Assert.IsTrue(list.IsValid(second));
             Assert.AreEqual(2, list[second]);
@@ -123,7 +142,7 @@ namespace Unity.Collections.Specialized.Tests
 
             list.Remove(second);
 
-            Assert.AreEqual(1, list.Count);
+            Assert.AreEqual(1, list.Length);
             Assert.IsTrue(list.IsValid(first));
             Assert.IsFalse(list.IsValid(second));
             Assert.AreEqual(10, list[first]);
@@ -138,6 +157,18 @@ namespace Unity.Collections.Specialized.Tests
             list.Remove(handle);
 
             Assert.IsFalse(list.IsValid(handle));
+        }
+
+        [Test]
+        public void Remove_InvalidHandle_Throws()
+        {
+            using var list = CreateList();
+
+            var handle = list.Add(1);
+            list.Remove(handle);
+
+            Assert.Throws<ArgumentException>(() => list.Remove(handle));
+            Assert.Throws<ArgumentException>(() => list.Remove(StableIndexHandle.Null));
         }
 
         [Test]
@@ -190,6 +221,94 @@ namespace Unity.Collections.Specialized.Tests
         }
 
         [Test]
+        public void Clear_EmptiesLengthWithoutChangingCapacity()
+        {
+            using var list = CreateList();
+
+            list.Add(1);
+            list.Add(2);
+            var capacityBeforeClear = list.Capacity;
+
+            list.Clear();
+
+            Assert.AreEqual(0, list.Length);
+            Assert.IsTrue(list.IsEmpty);
+            Assert.IsTrue(list.Data.IsEmpty);
+            Assert.AreEqual(capacityBeforeClear, list.Capacity);
+        }
+
+        [Test]
+        public void Clear_InvalidatesExistingHandlesAndResetsIdPool()
+        {
+            using var list = CreateList();
+
+            var first = list.Add(1);
+            var second = list.Add(2);
+
+            list.Clear();
+
+            Assert.IsFalse(list.IsValid(first));
+            Assert.IsFalse(list.IsValid(second));
+
+            var reused = list.Add(99);
+
+            Assert.AreEqual(0, reused.Index);
+            Assert.AreEqual(1, reused.Version);
+            Assert.IsTrue(list.IsValid(reused));
+            Assert.AreEqual(99, list[reused]);
+        }
+
+        [Test]
+        public void Clear_AllowsAddingAgain()
+        {
+            using var list = CreateList();
+
+            list.Add(1);
+            list.Clear();
+
+            var handle = list.Add(42);
+
+            Assert.AreEqual(1, list.Length);
+            Assert.IsTrue(list.IsValid(handle));
+            Assert.AreEqual(42, list[handle]);
+        }
+
+        [Test]
+        public void SetCapacity_IncreasesCapacityWithoutChangingLength()
+        {
+            using var list = CreateList();
+
+            list.Add(1);
+            list.Add(2);
+            var lengthBefore = list.Length;
+
+            list.SetCapacity(32);
+
+            Assert.AreEqual(lengthBefore, list.Length);
+            Assert.GreaterOrEqual(list.Capacity, 32);
+            Assert.AreEqual(1, list[0]);
+            Assert.AreEqual(2, list[1]);
+        }
+
+        [Test]
+        public void TrimExcess_SetsCapacityToLength()
+        {
+            using var list = new StableIndexList<int>(16, Allocator.Temp);
+
+            list.Add(1);
+            list.Add(2);
+            list.Add(3);
+
+            list.TrimExcess();
+
+            Assert.AreEqual(3, list.Length);
+            Assert.AreEqual(3, list.Capacity);
+            Assert.AreEqual(1, list[0]);
+            Assert.AreEqual(2, list[1]);
+            Assert.AreEqual(3, list[2]);
+        }
+
+        [Test]
         public void Growth_ReallocatesWhenCapacityExceeded()
         {
             using var list = new StableIndexList<int>(1, Allocator.Temp);
@@ -200,7 +319,7 @@ namespace Unity.Collections.Specialized.Tests
                 list.Add(i);
 
             Assert.Greater(list.Capacity, initialCapacity);
-            Assert.AreEqual(initialCapacity + 1, list.Count);
+            Assert.AreEqual(initialCapacity + 1, list.Length);
         }
 
         [Test]
@@ -236,16 +355,18 @@ namespace Unity.Collections.Specialized.Tests
             Assert.IsTrue(list.IsValid(handles[2]));
             Assert.IsFalse(list.IsValid(handles[3]));
             Assert.IsTrue(list.IsValid(handles[4]));
-            Assert.AreEqual(3, list.Count);
+            Assert.AreEqual(3, list.Length);
         }
 
         [Test]
-        public void Dispose_AllowsSecondCallWithoutThrowing()
+        public void Dispose_ClearsIsCreatedAndAllowsSecondCallWithoutThrowing()
         {
             var list = new StableIndexList<int>(Allocator.Temp);
             list.Add(1);
 
+            Assert.IsTrue(list.IsCreated);
             list.Dispose();
+            Assert.IsFalse(list.IsCreated);
             list.Dispose();
         }
 

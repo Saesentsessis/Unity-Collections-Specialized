@@ -249,6 +249,46 @@ namespace Unity.Collections.Specialized.Tests
         }
 
         [Test]
+        public void Remove_InvalidHandle_Throws()
+        {
+            var list = CreateList();
+            try
+            {
+                var handle = list.Add(1);
+                list.Remove(handle);
+
+                Assert.Throws<ArgumentException>(() => list.Remove(handle));
+                Assert.Throws<ArgumentException>(() => list.Remove(StableIndexHandle.Null));
+            }
+            finally
+            {
+                list.Dispose();
+            }
+        }
+
+        [Test]
+        public void HandleIndexer_DoesNotInvalidateAsArraySecondaryView()
+        {
+            var list = CreateList();
+            try
+            {
+                var handle = list.Add(10);
+                list.Add(20);
+
+                var array = list.AsArray();
+                ref var value = ref list[handle];
+                value = 99;
+
+                Assert.AreEqual(99, array[0]);
+                Assert.AreEqual(20, array[1]);
+            }
+            finally
+            {
+                list.Dispose();
+            }
+        }
+
+        [Test]
         public void IsValid_ReturnsFalse_ForNeverAllocatedIndex()
         {
             var list = CreateList();
@@ -319,6 +359,33 @@ namespace Unity.Collections.Specialized.Tests
 
                 Assert.AreEqual(0, list.Length);
                 Assert.AreEqual(capacityBeforeClear, list.Capacity);
+            }
+            finally
+            {
+                list.Dispose();
+            }
+        }
+
+        [Test]
+        public void Clear_InvalidatesExistingHandlesAndResetsIdPool()
+        {
+            var list = CreateList();
+            try
+            {
+                var first = list.Add(1);
+                var second = list.Add(2);
+
+                list.Clear();
+
+                Assert.IsFalse(list.IsValid(first));
+                Assert.IsFalse(list.IsValid(second));
+
+                var reused = list.Add(99);
+
+                Assert.AreEqual(0, reused.Index);
+                Assert.AreEqual(1, reused.Version);
+                Assert.IsTrue(list.IsValid(reused));
+                Assert.AreEqual(99, list[reused]);
             }
             finally
             {
@@ -425,7 +492,7 @@ namespace Unity.Collections.Specialized.Tests
         [Test]
         public void DisposeJob_CompletesAndReleasesList()
         {
-            var list = new NativeStableIndexList<int>(Allocator.Temp);
+            var list = new NativeStableIndexList<int>(Allocator.TempJob);
             list.Add(1);
 
             var jobHandle = list.Dispose(default);

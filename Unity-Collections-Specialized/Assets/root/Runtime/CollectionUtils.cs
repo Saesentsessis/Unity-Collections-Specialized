@@ -1,18 +1,10 @@
-﻿/*
-┌────────────────────────────────────────────────────────────────────────────┐
-│  Unity Collections Specialized                                             │
-│  Custom-made third-party package — not affiliated with or endorsed by      │
-│  Unity Technologies.                                                       │
-│  Repository: https://github.com/Saesentsessis/Unity-Collections-Specialized│
-└────────────────────────────────────────────────────────────────────────────┘
-*/
-
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using Unity.Burst.CompilerServices;
 using Unity.Collections.LowLevel.Unsafe;
+using UnityEngine.Scripting;
 
 namespace Unity.Collections.Specialized
 {
@@ -20,6 +12,7 @@ namespace Unity.Collections.Specialized
     {
         [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [Preserve]
         public static void CheckSizeMultipleOf8(int sizeInBytes)
         {
             if ((sizeInBytes & 7) != 0)
@@ -32,6 +25,15 @@ namespace Unity.Collections.Specialized
         {
             if ((uint)index >= (uint)length)
                 throw new IndexOutOfRangeException($"Index {index} is out of range in container of '{length}' Length.");
+        }
+
+        [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void CheckHandleValid(bool isValid, StableIndexHandle handle)
+        {
+            if (!isValid)
+                throw new ArgumentException(
+                    $"Invalid or stale StableIndexHandle (Index={handle.Index}, Version={handle.Version}).");
         }
         
         [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
@@ -46,6 +48,7 @@ namespace Unity.Collections.Specialized
 
         [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [Preserve]
         public static void CheckByteSizeInRange(long byteSize, long maxByteSize)
         {
             if ((ulong)byteSize > (ulong)maxByteSize)

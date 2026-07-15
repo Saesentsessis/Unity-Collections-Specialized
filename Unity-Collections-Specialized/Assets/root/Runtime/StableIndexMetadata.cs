@@ -1,13 +1,4 @@
-﻿/*
-┌────────────────────────────────────────────────────────────────────────────┐
-│  Unity Collections Specialized                                             │
-│  Custom-made third-party package — not affiliated with or endorsed by      │
-│  Unity Technologies.                                                       │
-│  Repository: https://github.com/Saesentsessis/Unity-Collections-Specialized│
-└────────────────────────────────────────────────────────────────────────────┘
-*/
-
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 
 namespace Unity.Collections.Specialized
 {
