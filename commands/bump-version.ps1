@@ -60,12 +60,53 @@ $VersionFiles = @(
         Pattern     = "https://github\.com/Saesentsessis/Unity-Collections-Specialized/releases/download/[\d\.]+/Unity-Collections-Specialized-Installer\.unitypackage"
         Replace     = "https://github.com/Saesentsessis/Unity-Collections-Specialized/releases/download/{VERSION}/Unity-Collections-Specialized-Installer.unitypackage"
         Description = "Repository README download URL"
+    },
+    @{
+        Path        = "Unity-Collections-Specialized/Assets/root/README.md"
+        Pattern     = '"com\.saesentsessis\.unity-collections-specialized":\s*"[\d\.]+"'
+        Replace     = '"com.saesentsessis.unity-collections-specialized": "{VERSION}"'
+        Description = "Package README manifest.json example"
+    },
+    @{
+        Path        = "README.md"
+        Pattern     = '"com\.saesentsessis\.unity-collections-specialized":\s*"[\d\.]+"'
+        Replace     = '"com.saesentsessis.unity-collections-specialized": "{VERSION}"'
+        Description = "Repository README manifest.json example"
+    },
+    @{
+        Path        = "Unity-Collections-Specialized/Assets/root/README.md"
+        Pattern     = "Unity-Collections-Specialized\.git\?path=Unity-Collections-Specialized/Assets/root#[\d\.]+"
+        Replace     = "Unity-Collections-Specialized.git?path=Unity-Collections-Specialized/Assets/root#{VERSION}"
+        Description = "Package README git URL tag"
+    },
+    @{
+        Path        = "README.md"
+        Pattern     = "Unity-Collections-Specialized\.git\?path=Unity-Collections-Specialized/Assets/root#[\d\.]+"
+        Replace     = "Unity-Collections-Specialized.git?path=Unity-Collections-Specialized/Assets/root#{VERSION}"
+        Description = "Repository README git URL tag"
     }
 )
 
 function Write-ColorText {
     param([string]$Text, [string]$Color = "White")
     Write-Host $Text -ForegroundColor $Color
+}
+
+function Get-TotalReplacements {
+    param([object[]]$Changes)
+
+    # Sum explicitly: 'Measure-Object -Property' cannot read hashtable keys in Windows PowerShell 5.1.
+    $total = 0
+    foreach ($change in $Changes) {
+        $total += $change.Matches
+    }
+    return $total
+}
+
+function Get-ChangedFileCount {
+    param([object[]]$Changes)
+
+    return @($Changes | ForEach-Object { $_.Path } | Select-Object -Unique).Count
 }
 
 function Test-SemanticVersion {
@@ -100,6 +141,9 @@ function Update-VersionFiles {
 
     $changes = @()
 
+    # Working copy per file, so several patterns on the same file accumulate instead of overwriting each other.
+    $pendingContent = [ordered]@{}
+
     foreach ($file in $VersionFiles) {
         $fullPath = $file.Path
 
@@ -108,26 +152,29 @@ function Update-VersionFiles {
             continue
         }
 
-        $content = Get-Content $fullPath -Raw
-        $originalContent = $content
+        if (-not $pendingContent.Contains($fullPath)) {
+            $pendingContent[$fullPath] = Get-Content $fullPath -Raw
+        }
+
+        $originalContent = $pendingContent[$fullPath]
 
         # Create the replacement string
         $replacement = $file.Replace -replace '\{VERSION\}', $NewVersion
 
         # Apply the replacement
-        $newContent = $content -replace $file.Pattern, $replacement
+        $newContent = $originalContent -replace $file.Pattern, $replacement
 
         # Check if any changes were made
         if ($originalContent -ne $newContent) {
             # Count matches for reporting
             $regexMatches = [regex]::Matches($originalContent, $file.Pattern)
 
+            $pendingContent[$fullPath] = $newContent
+
             $changes += @{
-                Path            = $file.Path
-                Description     = $file.Description
-                Matches         = $regexMatches.Count
-                Content         = $newContent
-                OriginalContent = $originalContent
+                Path        = $file.Path
+                Description = $file.Description
+                Matches     = $regexMatches.Count
             }
 
             Write-ColorText "?? $($file.Description): $($regexMatches.Count) occurrence(s)" "Green"
@@ -152,15 +199,15 @@ function Update-VersionFiles {
 
     if ($PreviewOnly) {
         Write-ColorText "`n?? Preview Summary:" "Cyan"
-        Write-ColorText "Files to be modified: $($changes.Count)" "White"
-        Write-ColorText "Total replacements: $(($changes | Measure-Object -Property Matches -Sum).Sum)" "White"
+        Write-ColorText "Files to be modified: $(Get-ChangedFileCount $changes)" "White"
+        Write-ColorText "Total replacements: $(Get-TotalReplacements $changes)" "White"
         return $null
     }
 
-    # Apply changes
-    foreach ($change in $changes) {
-        $fullPath = $change.Path
-        Set-Content -Path $fullPath -Value $change.Content -NoNewline
+    # Apply changes: write each changed file once, with all of its replacements.
+    $changedPaths = @($changes | ForEach-Object { $_.Path } | Select-Object -Unique)
+    foreach ($fullPath in $changedPaths) {
+        Set-Content -Path $fullPath -Value $pendingContent[$fullPath] -NoNewline
     }
 
     return $changes
@@ -193,7 +240,8 @@ try {
     Write-ColorText "`n?? Scanning for version references..." "Cyan"
 
     # Update version files
-    $changes = Update-VersionFiles -OldVersion $currentVersion -NewVersion $NewVersion -PreviewOnly $WhatIf
+    # @() keeps a single change as an array (a bare hashtable's .Count would count its keys).
+    $changes = @(Update-VersionFiles -OldVersion $currentVersion -NewVersion $NewVersion -PreviewOnly $WhatIf)
 
     if ($WhatIf) {
         Write-ColorText "`n? Preview completed. Use without -WhatIf to apply changes." "Green"
@@ -203,8 +251,8 @@ try {
 
     if ($changes -and $changes.Count -gt 0) {
         Write-ColorText "`n?? Version bump completed successfully!" "Green"
-        Write-ColorText "   Updated $($changes.Count) files" "White"
-        Write-ColorText "   Total replacements: $(($changes | Measure-Object -Property Matches -Sum).Sum)" "White"
+        Write-ColorText "   Updated $(Get-ChangedFileCount $changes) files" "White"
+        Write-ColorText "   Total replacements: $(Get-TotalReplacements $changes)" "White"
         Write-ColorText "   Version: $currentVersion > $NewVersion" "White"
         Write-ColorText "`n?? Remember to commit these changes to git" "Cyan"
     }

@@ -1,7 +1,5 @@
 using System;
-using System.Linq;
 using NUnit.Framework;
-using Unity.Collections;
 using Unity.Jobs;
 
 namespace Unity.Collections.Specialized.Tests
@@ -367,7 +365,7 @@ namespace Unity.Collections.Specialized.Tests
         }
 
         [Test]
-        public void Clear_InvalidatesExistingHandlesAndResetsIdPool()
+        public void Clear_InvalidatesExistingHandlesAndKeepsVersions()
         {
             var list = CreateList();
             try
@@ -382,8 +380,10 @@ namespace Unity.Collections.Specialized.Tests
 
                 var reused = list.Add(99);
 
-                Assert.AreEqual(0, reused.Index);
-                Assert.AreEqual(1, reused.Version);
+                // Versions survive Clear, so a re-used ID never aliases a pre-Clear handle.
+                Assert.AreEqual(first.Index, reused.Index);
+                Assert.AreNotEqual(first.Version, reused.Version);
+                Assert.IsFalse(list.IsValid(first));
                 Assert.IsTrue(list.IsValid(reused));
                 Assert.AreEqual(99, list[reused]);
             }
@@ -499,6 +499,129 @@ namespace Unity.Collections.Specialized.Tests
             jobHandle.Complete();
 
             Assert.IsFalse(list.IsCreated);
+        }
+
+        [Test]
+        public void IsEmpty_TracksLength()
+        {
+            var list = CreateList();
+            try
+            {
+                Assert.IsTrue(list.IsEmpty);
+
+                var handle = list.Add(1);
+                Assert.IsFalse(list.IsEmpty);
+
+                list.Remove(handle);
+                Assert.IsTrue(list.IsEmpty);
+            }
+            finally
+            {
+                list.Dispose();
+            }
+
+            Assert.IsTrue(list.IsEmpty);
+        }
+
+        [Test]
+        public void Dispose_DefaultInstance_DoesNotThrow()
+        {
+            var list = default(NativeStableIndexList<int>);
+
+            Assert.DoesNotThrow(() => list.Dispose());
+            Assert.AreEqual(default(JobHandle), list.Dispose(default));
+        }
+
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+        [Test]
+        public void DenseIndexer_OutOfRange_Throws()
+        {
+            var list = CreateList();
+            try
+            {
+                list.Add(1);
+
+                Assert.Throws<IndexOutOfRangeException>(() => { var _ = list[1]; });
+                Assert.Throws<IndexOutOfRangeException>(() => list[-1] = 2);
+            }
+            finally
+            {
+                list.Dispose();
+            }
+        }
+
+        [Test]
+        public void AsArray_IsInvalidatedByStructuralChange()
+        {
+            var list = CreateList();
+            try
+            {
+                list.Add(1);
+                var array = list.AsArray();
+
+                list.Add(2);
+
+                Assert.Catch<InvalidOperationException>(() => { var _ = array[0]; });
+            }
+            finally
+            {
+                list.Dispose();
+            }
+        }
+
+        [Test]
+        public void DisposedCopy_ThrowsOnAccess()
+        {
+            var list = new NativeStableIndexList<int>(Allocator.Persistent);
+            var copy = list;
+
+            list.Dispose();
+
+            Assert.Catch<InvalidOperationException>(() => { var _ = copy.Length; });
+        }
+
+        [Test]
+        public void ReadOnlyJob_BlocksMainThreadWrites_UntilCompleted()
+        {
+            var list = new NativeStableIndexList<int>(Allocator.TempJob);
+            var handles = new NativeArray<StableIndexHandle>(1, Allocator.TempJob);
+            var result = new NativeArray<int>(1, Allocator.TempJob);
+            try
+            {
+                handles[0] = list.Add(5);
+
+                var job = new SumJob { List = list, Handles = handles, Result = result }.Schedule();
+
+                Assert.Catch<InvalidOperationException>(() => list.Add(6));
+
+                job.Complete();
+
+                Assert.AreEqual(5, result[0]);
+                Assert.DoesNotThrow(() => list.Add(6));
+            }
+            finally
+            {
+                list.Dispose();
+                handles.Dispose();
+                result.Dispose();
+            }
+        }
+#endif
+
+        private struct SumJob : IJob
+        {
+            [ReadOnly] public NativeStableIndexList<int> List;
+            [ReadOnly] public NativeArray<StableIndexHandle> Handles;
+            public NativeArray<int> Result;
+
+            public void Execute()
+            {
+                var sum = 0;
+                for (var i = 0; i < Handles.Length; i++)
+                    sum += List.AsReadOnlySpan()[i];
+
+                Result[0] = sum;
+            }
         }
 
         private static NativeStableIndexList<int> CreateList()

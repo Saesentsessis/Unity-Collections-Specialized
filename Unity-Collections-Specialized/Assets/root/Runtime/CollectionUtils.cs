@@ -79,6 +79,31 @@ namespace Unity.Collections.Specialized
             return value;
         }
         
+        /// <summary>
+        /// Bitwise equality of two unmanaged values.
+        /// </summary>
+        /// <remarks>
+        /// Sizes of 1, 2, 4, 8 and 16 bytes compare as whole integers; <c>sizeof(T)</c> is a constant per instantiation,
+        /// so Burst keeps only the matching branch. Other sizes fall back to <see cref="UnsafeUtility.MemCmp"/>, which Burst
+        /// lowers to a byte loop. Padding bytes take part in the comparison.
+        /// </remarks>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static unsafe bool BitwiseEquals<T>(ref T a, ref T b) where T : unmanaged
+        {
+            var pa = UnsafeUtility.AddressOf(ref a);
+            var pb = UnsafeUtility.AddressOf(ref b);
+
+            switch (sizeof(T))
+            {
+                case 1: return *(byte*)pa == *(byte*)pb;
+                case 2: return *(ushort*)pa == *(ushort*)pb;
+                case 4: return *(uint*)pa == *(uint*)pb;
+                case 8: return *(ulong*)pa == *(ulong*)pb;
+                case 16: return ((ulong*)pa)[0] == ((ulong*)pb)[0] && ((ulong*)pa)[1] == ((ulong*)pb)[1];
+                default: return UnsafeUtility.MemCmp(pa, pb, sizeof(T)) == 0;
+            }
+        }
+
         [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
         public static void CheckAllocator(AllocatorManager.AllocatorHandle allocator)
         {

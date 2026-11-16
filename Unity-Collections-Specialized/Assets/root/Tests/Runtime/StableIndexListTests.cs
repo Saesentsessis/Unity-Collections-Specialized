@@ -238,7 +238,7 @@ namespace Unity.Collections.Specialized.Tests
         }
 
         [Test]
-        public void Clear_InvalidatesExistingHandlesAndResetsIdPool()
+        public void Clear_InvalidatesExistingHandlesAndKeepsVersions()
         {
             using var list = CreateList();
 
@@ -252,8 +252,10 @@ namespace Unity.Collections.Specialized.Tests
 
             var reused = list.Add(99);
 
-            Assert.AreEqual(0, reused.Index);
-            Assert.AreEqual(1, reused.Version);
+            // Versions survive Clear, so a re-used ID never aliases a pre-Clear handle.
+            Assert.AreEqual(first.Index, reused.Index);
+            Assert.AreNotEqual(first.Version, reused.Version);
+            Assert.IsFalse(list.IsValid(first));
             Assert.IsTrue(list.IsValid(reused));
             Assert.AreEqual(99, list[reused]);
         }
@@ -306,6 +308,27 @@ namespace Unity.Collections.Specialized.Tests
             Assert.AreEqual(1, list[0]);
             Assert.AreEqual(2, list[1]);
             Assert.AreEqual(3, list[2]);
+        }
+
+        [Test]
+        public void TrimExcess_AfterRemovingLowIds_KeepsSurvivorHandleValid()
+        {
+            using var list = CreateList();
+
+            var handles = new StableIndexHandle[8];
+            for (var i = 0; i < handles.Length; i++)
+                handles[i] = list.Add(i * 10);
+
+            for (var i = 0; i < handles.Length - 1; i++)
+                list.Remove(handles[i]);
+
+            list.TrimExcess();
+
+            var survivor = handles[handles.Length - 1];
+            Assert.AreEqual(1, list.Length);
+            Assert.GreaterOrEqual(list.Capacity, survivor.Index + 1);
+            Assert.IsTrue(list.IsValid(survivor));
+            Assert.AreEqual(70, list[survivor]);
         }
 
         [Test]
@@ -368,6 +391,47 @@ namespace Unity.Collections.Specialized.Tests
             list.Dispose();
             Assert.IsFalse(list.IsCreated);
             list.Dispose();
+        }
+
+        [Test]
+        public void TryRemove_ReturnsTrueOnce_ThenFalseWithoutThrowing()
+        {
+            using var list = CreateList();
+
+            var handle = list.Add(1);
+            var other = list.Add(2);
+
+            Assert.IsTrue(list.TryRemove(handle));
+            Assert.IsFalse(list.TryRemove(handle));
+            Assert.IsFalse(list.TryRemove(StableIndexHandle.Null));
+            Assert.AreEqual(1, list.Length);
+            Assert.AreEqual(2, list[other]);
+        }
+
+        [Test]
+        public void Remove_ClearsVacatedSlotForGarbageCollection()
+        {
+            using var list = new StableIndexList<object>(Allocator.Temp);
+
+            var a = list.Add(new object());
+            var b = list.Add(new object());
+            var bValue = list[b];
+
+            list.Remove(a);
+
+            Assert.AreSame(bValue, list[0]);
+            Assert.IsNull(list[1]);
+        }
+
+        [Test]
+        public void SetCapacity_SmallerThanCurrent_DoesNotShrink()
+        {
+            using var list = new StableIndexList<int>(32, Allocator.Temp);
+            var capacity = list.Capacity;
+
+            list.SetCapacity(1);
+
+            Assert.AreEqual(capacity, list.Capacity);
         }
 
         private static StableIndexList<int> CreateList()

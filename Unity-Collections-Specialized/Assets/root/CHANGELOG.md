@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-11-16
+
+### Added
+
+- `GenerationalStableIndexList<T>`, `UnsafeGenerationalStableIndexList<T>` and `NativeGenerationalStableIndexList<T>` — stable-index lists with a `uint Generation` counter (unchecked wrap).
+  - Implemented as thin wrappers over the plain lists of the same tier, so all storage / handle logic is shared.
+  - Generation bumps on `Add`, a successful `Remove` / `TryRemove`, `Clear` (bumps instead of resetting), `Resize` / `Length` set, and on value writes (`Set`, `SetAt`, setters) only when the value changes. Growth, `SetCapacity` and `TrimExcess` never bump.
+  - `UnsafeGenerationalStableIndexList<T>` keeps untracked `ref` accessors plus `BumpGeneration()`; `NativeGenerationalStableIndexList<T>` is read-only (by-value indexers, `AsReadOnly()`, `AsReadOnlySpan()`), with writes through `Set` / `SetAt`.
+- `NativeSlotAllocator` and `UnsafeSlotAllocator` - a standalone stable index slot allocator. `NativeSlotAllocator` exposes `IsValid` and `IsEmpty`.
+- `TryRemove` on `UnsafeStableIndexList<T>` and `StableIndexList<T>` — removes by handle and returns whether anything was removed.
+- `NativeStableIndexList<T>.IsEmpty`; the dense indexer now range-checks under `ENABLE_UNITY_COLLECTIONS_CHECKS`.
+
+### Changed
+
+- **Breaking:** minimum supported Unity version raised from 2021.3 to **2022.3** (the lowest version the package is tested on, with `com.unity.collections` 2.1.4).
+- **Breaking:** `UnsafeStableIndexList<T>` and `StableIndexList<T>` now delegate handle / ID bookkeeping to `UnsafeSlotAllocator`.
+  - `Clear()` keeps slot versions, so handles taken before `Clear` can no longer become valid again.
+  - `SetCapacity` is grow-only; `TrimExcess` shrinks to the smallest ID space that still covers every live ID.
+  - Unsafe `Remove` now validates the handle and ignores invalid or stale handles (Native / managed `Remove` still throw under `ENABLE_UNITY_COLLECTIONS_CHECKS`).
+  - IDs handed out by `Length` / `Resize` growth are re-used pre-minted IDs and are no longer equal to dense indices.
+  - `UnsafeStableIndexList<T>` public fields `m_length`, `m_capacity`, `m_idCapacity` and `Allocator` are replaced by the `Length`, `Capacity` and `Allocator` properties.
+  - **Migration:** read `Length` / `Capacity` instead of `m_length` / `m_capacity`; don't rely on handle versions restarting at 1 after `Clear`.
+
+### Fixed
+
+- `UnsafeStableIndexList<T>`, `NativeStableIndexList<T>` and `StableIndexList<T>` now clears it's internal variables on deferred `Destroy(JobHandle)` call.
+- `NativeStableIndexList<T>` now inherits from `INativeDisposable` instead of `IDisposable`.
+- `StableIndexList<T>.TrimExcess` / `SetCapacity` no longer overflow the metadata buffers when more IDs exist than the new capacity.
+- `UnsafeStableIndexList<T>.TrimExcess` / `SetCapacity` no longer lose live elements whose ID is at or above the new capacity.
+- `NativeStableIndexList<T>` and `NativeSlotAllocator` can now be used in jobs: the list pointer is marked `[NativeDisableUnsafePtrRestriction]` and the `DisposeSentinel` `[NativeSetClassTypeToNullOnSchedule]` (scheduling previously threw).
+- `NativeSlotAllocator.GetHashCode` no longer dereferences the allocator header.
+
 ## [0.2.0] - 2026-07-15
 
 ### Added
@@ -59,6 +91,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `StableIndexHandle` for generation-safe references into collections.
 - Dependencies on `com.unity.collections` 2.0.0 and `com.unity.burst` 1.8.0.
 
+[0.3.0]: https://github.com/Saesentsessis/Unity-Collections-Specialized/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/Saesentsessis/Unity-Collections-Specialized/compare/0.1.1...0.2.0
 [0.1.1]: https://github.com/Saesentsessis/Unity-Collections-Specialized/compare/0.1.0...0.1.1
 [0.1.0]: https://github.com/Saesentsessis/Unity-Collections-Specialized/releases/tag/0.1.0

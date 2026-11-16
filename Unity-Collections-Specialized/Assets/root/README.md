@@ -44,28 +44,49 @@ By deliberately omitting mandatory bounds and version-checking during the actual
 `list[handle]` retrieval, the API guarantees **zero-overhead access** in performance
 critical sections, where the caller can already assure the handle validity.
 
-Native and managed `Remove` still validate handles when
-`ENABLE_UNITY_COLLECTIONS_CHECKS` is enabled. Unsafe `Remove` does not.
+Native and managed `Remove` throw on invalid handles when
+`ENABLE_UNITY_COLLECTIONS_CHECKS` is enabled. Unsafe `Remove` validates through the
+slot allocator and ignores invalid or stale handles; `TryRemove` reports whether an
+element was removed.
 
 ### Length and Resize growth
 
-On `UnsafeStableIndexList<T>`, growing via `Length` or `Resize` mints stable-index
-metadata and sparse IDs for each new dense slot (same rules as `Add`). Shrinking
+On `UnsafeStableIndexList<T>`, growing via `Length` or `Resize` hands out slots from
+the internal `UnsafeSlotAllocator` (same rules as `Add`; IDs need not equal dense indices). Shrinking
 truncates the dense length; handles into truncated slots fail `IsValid` via bounds.
 Prefer `Add` / `Remove` for normal handle-oriented lifecycle; use `Length` /
 `Resize` when you need bulk dense sizing with handle-consistent slots.
 
+`SetCapacity` only grows. `TrimExcess` shrinks to the smallest ID space that still
+covers every live handle, so trimming never invalidates live handles.
+
 ## Key types
 
-| Type                       | Description                                                           |
-|----------------------------|-----------------------------------------------------------------------|
-| `StableIndexList<T>`       | Managed list with stable handles and swap-back removal                |
-| `NativeStableIndexList<T>` | Native container with safety handles and job-safe disposal            |
-| `UnsafeStableIndexList<T>` | Unmanaged pointer-based list for Burst and low-level code             |
-| `StableIndexHandle`        | Generation-safe handle; stale after the referenced element is removed |
+| Type                                   | Description                                                                          |
+|----------------------------------------|--------------------------------------------------------------------------------------|
+| `StableIndexList<T>`                   | Managed list (any `T`) with stable handles and swap-back removal                     |
+| `GenerationalStableIndexList<T>`       | `StableIndexList<T>` plus a `Generation` counter that changes on every content change |
+| `NativeStableIndexList<T>`             | Native container with safety handles and job-safe disposal                           |
+| `NativeGenerationalStableIndexList<T>` | `NativeStableIndexList<T>` plus a `Generation` counter; read-only element access      |
+| `UnsafeStableIndexList<T>`             | Unmanaged pointer-based list for Burst and low-level code                            |
+| `UnsafeGenerationalStableIndexList<T>` | `UnsafeStableIndexList<T>` plus a `Generation` counter; keeps untracked `ref` access  |
+| `UnsafeSlotAllocator` / `NativeSlotAllocator` | The handle / ID bookkeeping every list is built on, usable on its own         |
+| `StableIndexHandle`                    | Generation-safe handle; stale after the referenced element is removed                |
 
 Managed and native/unsafe variants expose `Length` (element count) and `Capacity`
 (allocated slots). Prefer `Length` for sizing checks.
+
+### Generations
+
+The generational lists expose `uint Generation` (unchecked wrap) so observers can cheaply detect
+changes. It bumps on `Add`, a successful `Remove` / `TryRemove`, `Clear` (bumps instead of resetting,
+so a cached value never matches again by accident), `Resize` / `Length` set, and on value writes
+(`Set`, `SetAt`, setters) only when the new value differs. Growth, `SetCapacity` and `TrimExcess`
+never bump.
+
+`UnsafeGenerationalStableIndexList<T>` keeps `ref` accessors for zero-overhead writes; those writes
+are not tracked, so call `BumpGeneration()` after them if observers must notice. The Native variant
+only offers read-only access and writes through `Set` / `SetAt`, so its generation sees every change.
 
 ## Migrating from 0.1.x
 
@@ -120,7 +141,7 @@ if (list.IsValid(handle))
     // ...
 }
 
-list.Clear(); // resets Length and ID pool
+list.Clear(); // resets Length; handles taken before Clear stay invalid
 Debug.Log(list.Length); // 0
 
 // Don't forget to release unmanaged memory.
@@ -129,7 +150,7 @@ list.Dispose();
 
 ## Requirements
 
-- Unity **2021.3** or newer
+- Unity **2022.3** or newer
 - [`com.unity.collections`](https://docs.unity3d.com/Packages/com.unity.collections@latest) **2.1.4** or newer
 - [`com.unity.burst`](https://docs.unity3d.com/Packages/com.unity.burst@latest) **1.8.0** or newer
 
@@ -148,7 +169,7 @@ Or manually add the scoped registry to your `Packages/manifest.json`:
 ```json
 {
   "dependencies": {
-    "com.saesentsessis.unity-collections-specialized": "0.2.0"
+    "com.saesentsessis.unity-collections-specialized": "0.3.0"
   },
   "scopedRegistries": [
     {
@@ -165,7 +186,7 @@ Or manually add the scoped registry to your `Packages/manifest.json`:
 ### Method 2: Unity package installer
 
 1. Download the latest `.unitypackage` from [GitHub Releases page](https://github.com/Saesentsessis/Unity-Collections-Specialized/releases).
-   - _Direct Link:_ [Unity-Collections-Specialized-Installer.unitypackage](https://github.com/Saesentsessis/Unity-Collections-Specialized/releases/download/0.2.0/Unity-Collections-Specialized-Installer.unitypackage)
+   - _Direct Link:_ [Unity-Collections-Specialized-Installer.unitypackage](https://github.com/Saesentsessis/Unity-Collections-Specialized/releases/download/0.3.0/Unity-Collections-Specialized-Installer.unitypackage)
 2. Import the downloaded package into your Unity project.
 3. The installer will automatically configure OpenUPM in your `manifest.json` file and install the package dependencies.
 
@@ -182,7 +203,7 @@ https://github.com/Saesentsessis/Unity-Collections-Specialized.git?path=Unity-Co
 You can specify exact release version of this package like this:
 
 ```txt
-https://github.com/Saesentsessis/Unity-Collections-Specialized.git?path=Unity-Collections-Specialized/Assets/root#0.2.0
+https://github.com/Saesentsessis/Unity-Collections-Specialized.git?path=Unity-Collections-Specialized/Assets/root#0.3.0
 ```
 
 ## License

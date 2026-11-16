@@ -249,8 +249,6 @@ jobs:
           # OpenUPM consumes the asset via the `githubReleaseAssetName: 'com.saesentsessis.unity-collections-specialized-'`
           # prefix documented in docs/openupm-signing.md. Enforce the contract here so a future
           # `upm pack` naming change fails CI loudly instead of silently breaking OpenUPM pickup.
-          # NOTE: replace `com.saesentsessis.unity-collections-specialized` below with your real package id (e.g. com.company.package)
-          # when you adopt this sample as release.yml.
           if [[ "$archive_basename" != com.saesentsessis.unity-collections-specialized-* ]]; then
             printf 'Signed archive basename %q does not begin with the OpenUPM-expected prefix com.saesentsessis.unity-collections-specialized- (see docs/openupm-signing.md)\n' "$archive_basename" >&2
             exit 1

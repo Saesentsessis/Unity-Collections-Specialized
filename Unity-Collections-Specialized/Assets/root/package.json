@@ -12,8 +12,8 @@
         "Stable Index",
         "Burst"
     ],
-    "version": "0.2.0",
-    "unity": "2021.3",
+    "version": "0.3.0",
+    "unity": "2022.3",
     "description": "Specialized collection types with stable index handles for Unity.Collections and Burst, including StableIndexList, NativeStableIndexList, and UnsafeStableIndexList.",
     "dependencies": {
         "com.unity.collections": "2.1.4",
