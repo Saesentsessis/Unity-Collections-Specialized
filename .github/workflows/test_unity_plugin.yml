@@ -86,7 +86,9 @@ jobs:
         run: echo "image=unityci/editor:ubuntu-${{ inputs.unityVersion }}-${{ matrix.platform }}-3" >> $GITHUB_OUTPUT
         shell: bash
 
-      - uses: game-ci/unity-test-runner@v4
+      # Pinned: v4.4.0 (the floating v4 tag) resolves `cliVersion: latest` through an unauthenticated GitHub API
+      # call that fails with 403 under rate limiting (fixed upstream in game-ci/unity-test-runner#332, unreleased).
+      - uses: game-ci/unity-test-runner@v4.3.2
         id: tests
         env:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
