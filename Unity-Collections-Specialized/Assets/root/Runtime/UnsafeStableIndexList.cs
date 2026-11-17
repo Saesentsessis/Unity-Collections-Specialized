@@ -25,7 +25,22 @@ namespace Unity.Collections.Specialized
             AllocatorManager.Free(Allocator, MetaIndicesPackedPtr);
         }
     }
-    
+
+    /// <summary>
+    /// Stable-index list whose handle / ID bookkeeping is delegated to an <see cref="UnsafeSlotAllocator"/>.
+    /// This struct only owns the dense element buffer and mirrors the allocator's swap-back moves into it.
+    /// </summary>
+    /// <remarks>
+    /// Invariant: the data buffer capacity always equals <c>m_slots.Capacity</c>, so the allocator never grows on its own
+    /// (the list grows it first, then reallocates <see cref="DataPtr"/> to match).
+    /// Behaviour notes:
+    /// <list type="bullet">
+    /// <item><see cref="Remove"/> validates the handle (via <see cref="UnsafeSlotAllocator.Release"/>); an invalid handle is a no-op.</item>
+    /// <item><see cref="Clear"/> keeps slot versions, so handles taken before <c>Clear</c> stay invalid afterwards.</item>
+    /// <item><see cref="SetCapacity"/> is grow-only; <see cref="TrimExcess"/> shrinks without orphaning live IDs.</item>
+    /// <item><see cref="Resize"/> re-uses pre-minted IDs; handed-out IDs are not necessarily equal to dense indices.</item>
+    /// </list>
+    /// </remarks>
     [StructLayout(LayoutKind.Sequential)]
     public unsafe struct UnsafeStableIndexList<T>
         : INativeDisposable
@@ -36,9 +51,7 @@ namespace Unity.Collections.Specialized
         /// <summary>
         /// The maximum number of elements this type of container can hold.
         /// </summary>
-        public const int MaxCapacity = int.MaxValue;
-        
-        public static readonly int PackedElementSize = sizeof(StableIndexMetadata) + sizeof(int);
+        public const int MaxCapacity = UnsafeSlotAllocator.MaxCapacity;
 
         public static void Destroy(UnsafeStableIndexList<T>* listData)
         {
@@ -47,457 +60,249 @@ namespace Unity.Collections.Specialized
             listData->Dispose();
             AllocatorManager.Free(allocator, listData);
         }
-        
+
         /// <summary>
-        /// Dense storage for data.
+        /// Dense storage for data. Capacity is always <see cref="Capacity"/>.
         /// </summary>
         [NativeDisableUnsafePtrRestriction]
         public T* DataPtr;
 
         /// <summary>
-        /// Container 
+        /// Stable ID / version bookkeeping (dense metadata + sparse indices).
         /// </summary>
-        [NativeDisableUnsafePtrRestriction]
-        private void* _metaAndIndicesPtr;
+        internal UnsafeSlotAllocator m_slots;
 
-        /// <summary>
-        /// Dense storage for Metadata.
-        /// Maps: Dense Index -> Metadata { RID, Validity }.
-        /// </summary>
-        public StableIndexMetadata* MetaPtr => (StableIndexMetadata*)_metaAndIndicesPtr;
-
-        /// <summary>
-        /// Sparse storage for Indices.
-        /// Maps: ID -> Dense Index.
-        /// Offset is capacity * (sizeof(StableIndexMetadata) / sizeof(int)) because
-        /// meta and indices share one SoA allocation: [Meta × capacity][Indices × capacity].
-        /// </summary>
-        public int* IndicesPtr => (int*)_metaAndIndicesPtr + m_capacity * (sizeof(StableIndexMetadata) / sizeof(int));
-
-        /// <summary>
-        /// The number of elements.
-        /// </summary>
-        public int m_length;
-
-        /// <summary>
-        /// The number of elements that can fit in the internal buffer.
-        /// </summary>
-        public int m_capacity;
-        
-        /// <summary>
-        /// The number of IDs ever allocated (Active + Free)
-        /// </summary>
-        public int m_idCapacity;
-
-        /// <summary>
-        /// The allocator used to create the internal buffer.
-        /// </summary>
-        public AllocatorManager.AllocatorHandle Allocator;
-
-        /// <summary>
-        /// Initializes and returns an instance of UnsafeList.
-        /// </summary>
-        /// <param name="initialCapacity">The initial capacity of the list.</param>
-        /// <param name="allocator">The allocator to use.</param>
-        /// <param name="options">Whether newly allocated bytes should be zeroed out.</param>
         public UnsafeStableIndexList(int initialCapacity, AllocatorManager.AllocatorHandle allocator, NativeArrayOptions options = NativeArrayOptions.UninitializedMemory)
         {
             DataPtr = null;
-            _metaAndIndicesPtr = null;
-            m_length = 0;
-            m_capacity = 0;
-            m_idCapacity = 0;
-            Allocator = allocator;
-            
-            SetCapacity(math.max(initialCapacity, 1));
+            m_slots = new UnsafeSlotAllocator(initialCapacity, allocator);
 
-            if ((options & NativeArrayOptions.ClearMemory) != NativeArrayOptions.ClearMemory)
-                return;
-            
-            if (DataPtr != null)
-                UnsafeUtility.MemClear(DataPtr, (long)m_capacity * sizeof(T));
-            if (_metaAndIndicesPtr != null)
-                UnsafeUtility.MemClear(_metaAndIndicesPtr, (long)m_capacity * PackedElementSize);
+            ReallocateData(m_slots.m_capacity);
+
+            if ((options & NativeArrayOptions.ClearMemory) == NativeArrayOptions.ClearMemory && DataPtr != null)
+                UnsafeUtility.MemClear(DataPtr, (long)m_slots.m_capacity * sizeof(T));
         }
-        
+
         /// <summary>
-        /// The number of elements.
+        /// Dense storage for Metadata. Maps: Dense Index -> Metadata { RID, Version }.
         /// </summary>
-        /// <value>The number of elements.</value>
+        public StableIndexMetadata* MetaPtr => m_slots.MetaPtr;
+
+        /// <summary>
+        /// Sparse storage for Indices. Maps: ID -> Dense Index.
+        /// </summary>
+        public int* IndicesPtr => m_slots.IndicesPtr;
+
+        public readonly AllocatorManager.AllocatorHandle Allocator
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => m_slots.m_allocator;
+        }
+
+        /// <summary>
+        /// The number of elements. Growing mints handle-consistent slots; shrinking truncates.
+        /// </summary>
         public int Length
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            readonly get => CollectionUtils.AssumePositive(m_length);
-
-            set
-            {
-                if (value < 0)
-                    throw new ArgumentOutOfRangeException(nameof(value), "Length must be non-negative.");
-
-                // Shrink: truncate dense length. Handles past the new length fail IsValid via bounds.
-                if (value <= m_length)
-                {
-                    m_length = value;
-                    return;
-                }
-
-                // Grow: ensure capacity and mint stable IDs for every new dense slot.
-                Resize(value, NativeArrayOptions.UninitializedMemory);
-            }
+            readonly get => CollectionUtils.AssumePositive(m_slots.m_length);
+            set => Resize(value);
         }
-        
+
         /// <summary>
-        /// The number of elements that can fit in the internal buffer.
+        /// The number of elements that can fit in the internal buffers. Setting is grow-only.
         /// </summary>
-        /// <value>The number of elements that can fit in the internal buffer.</value>
         public int Capacity
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            readonly get => CollectionUtils.AssumePositive(m_capacity);
+            readonly get => CollectionUtils.AssumePositive(m_slots.m_capacity);
             set => SetCapacity(value);
         }
-        
-        /// <summary>
-        /// Whether the list is empty.
-        /// </summary>
-        /// <value>True if the list is empty or the list has not been constructed.</value>
+
         public readonly bool IsEmpty
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => !IsCreated || m_length == 0;
+            get => !IsCreated || m_slots.m_length == 0;
         }
 
-        /// <summary>
-        /// Whether this list has been allocated (and not yet deallocated).
-        /// </summary>
-        /// <value>True if this list has been allocated (and not yet deallocated).</value>
         public readonly bool IsCreated
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get => DataPtr != null;
         }
-        
-        /// <summary>
-        /// The element at an index.
-        /// </summary>
-        /// <param name="index">An index.</param>
-        /// <value>The element at the index.</value>
+
         public T this[int index]
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get
             {
-                CollectionUtils.CheckIndexInRange(index, m_length);
+                CollectionUtils.CheckIndexInRange(index, m_slots.m_length);
                 return DataPtr[CollectionUtils.AssumePositive(index)];
             }
-
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             set
             {
-                CollectionUtils.CheckIndexInRange(index, m_length);
+                CollectionUtils.CheckIndexInRange(index, m_slots.m_length);
                 DataPtr[CollectionUtils.AssumePositive(index)] = value;
             }
         }
-        
+
         /// <summary>
-        /// Stable Handle Accessor. Maps Handle to Dense Index.
+        /// Stable handle accessor. Does not validate the version (use <see cref="IsValid"/>).
         /// </summary>
-        /// <param name="handle">A handle.</param>
-        /// <value>The element of that handle.</value>
         public ref T this[in StableIndexHandle handle]
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get
-            {
-                CollectionUtils.CheckIndexInRange(handle.Index, m_idCapacity);
-                return ref DataPtr[CollectionUtils.AssumePositive(IndicesPtr[CollectionUtils.AssumePositive(handle.Index)])];
-            } 
+            get => ref ElementAt(in handle);
         }
-        
-        /// <summary>
-        /// Returns a reference to the element at a given index.
-        /// </summary>
-        /// <param name="index">The index to access. Must be in the range of [0..Length).</param>
-        /// <returns>A reference to the element at the index.</returns>
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public ref T ElementAt(int index)
         {
-            CollectionUtils.CheckIndexInRange(index, m_length);
+            CollectionUtils.CheckIndexInRange(index, m_slots.m_length);
             return ref DataPtr[CollectionUtils.AssumePositive(index)];
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public ref T ElementAt(in StableIndexHandle handle)
         {
-            CollectionUtils.CheckIndexInRange(handle.Index, m_idCapacity);
-            return ref DataPtr[CollectionUtils.AssumePositive(IndicesPtr[CollectionUtils.AssumePositive(handle.Index)])];
+            CollectionUtils.CheckIndexInRange(handle.Index, m_slots.m_capacity);
+            return ref DataPtr[CollectionUtils.AssumePositive(m_slots.IndicesPtr[CollectionUtils.AssumePositive(handle.Index)])];
         }
-        
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool IsValid(in StableIndexHandle handle)
-        {
-            if ((uint)handle.Index >= (uint)m_idCapacity)
-                return false;
+        public bool IsValid(in StableIndexHandle handle) => m_slots.IsValid(handle.Index, handle.Version);
 
-            var denseIndex = IndicesPtr[handle.Index];
-        
-            if ((uint)denseIndex >= (uint)m_length)
-                return false;
-
-            return MetaPtr[denseIndex].Version == handle.Version;
-        }
-        
         /// <summary>
-        /// Adds an element using the Stable Index routing.
+        /// Adds an element and returns its stable handle.
         /// </summary>
-        /// <param name="value">The value to add to the list.</param>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public StableIndexHandle Add(in T value)
         {
-            int id = GetFreeSlot(out int version);
+            if (m_slots.m_length == m_slots.m_capacity)
+                Grow();
 
-            DataPtr[m_length] = value;
-            IndicesPtr[id] = m_length;
-    
-            m_length++;
-    
+            var id = m_slots.Allocate(out var version);
+            DataPtr[m_slots.m_length - 1] = value;
+
             return new StableIndexHandle(id, version);
         }
-        
+
         /// <summary>
-        /// Removes an element using its Handle, maintaining dense storage contiguity.
+        /// Removes an element by handle using swap-back. Invalid / stale handles are ignored.
         /// </summary>
-        /// <param name="handle">The handle pointing to the element, that should be removed.</param>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public void Remove(in StableIndexHandle handle)
-        {   
-            int id = handle.Index;
-            int denseIndex = IndicesPtr[id];
-    
-            int lastDenseIndex = m_length - 1;
-            int lastId = MetaPtr[lastDenseIndex].ReverseId;
-
-            ref var meta = ref MetaPtr[denseIndex];
-            meta.Version++;
-
-            DataPtr[denseIndex] = DataPtr[lastDenseIndex];
-
-            (MetaPtr[denseIndex], MetaPtr[lastDenseIndex]) = (MetaPtr[lastDenseIndex], MetaPtr[denseIndex]);
-
-            IndicesPtr[lastId] = denseIndex;
-            IndicesPtr[id] = lastDenseIndex; 
-
-            m_length--;
-        }
+        public void Remove(in StableIndexHandle handle) => TryRemove(in handle);
 
         /// <summary>
-        /// Resets length and ID capacity to 0 without zeroing allocated memory.
+        /// Removes an element by handle using swap-back.
         /// </summary>
-        /// <remarks>
-        /// Does not change the capacity. All existing handles become invalid.
-        /// </remarks>
-        public void Clear()
+        /// <returns>False if the handle was invalid or stale (nothing removed).</returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool TryRemove(in StableIndexHandle handle)
         {
-            m_length = 0;
-            m_idCapacity = 0;
+            if (!m_slots.Release(handle.Index, handle.Version, out var removedDense, out var movedFromDense))
+                return false;
+
+            if (removedDense != movedFromDense)
+                DataPtr[removedDense] = DataPtr[movedFromDense];
+
+            return true;
         }
-        
+
         /// <summary>
-        /// Sets the capacity to match the length.
+        /// Resets length to 0 without zeroing memory. Versions are kept, so all existing handles stay invalid.
+        /// </summary>
+        public void Clear() => m_slots.Clear();
+
+        /// <summary>
+        /// Shrinks capacity to the smallest ID space that still covers every live ID (minimum one allocator block).
         /// </summary>
         public void TrimExcess()
         {
-            if (Capacity == m_length)
-                return;
-            
-            ResizeExact(m_length);
+            var oldCapacity = m_slots.m_capacity;
+
+            m_slots.TrimExcess();
+
+            // An empty allocator trims to zero capacity (and a null buffer); keep the list created.
+            if (m_slots.m_capacity == 0)
+                m_slots.SetCapacity(1);
+
+            if (m_slots.m_capacity != oldCapacity)
+                ReallocateData(m_slots.m_capacity);
         }
-        
+
         /// <summary>
         /// Sets the length, expanding the capacity if necessary.
-        /// Growing mints stable-index metadata and sparse IDs for each new dense slot
-        /// so handles remain consistent with <see cref="Add"/>.
         /// </summary>
         /// <param name="length">The new length.</param>
-        /// <param name="options">Whether newly allocated data bytes should be zeroed out.</param>
-        /// <remarks>
-        /// ClearMemory zeroes <see cref="DataPtr"/> only for the grown range; meta/indices
-        /// are initialized by ID minting (clearing meta would destroy recycled reverse IDs).
-        /// Shrinking truncates length without walking versions.
-        /// </remarks>
+        /// <param name="options">Whether the grown data range should be zeroed.</param>
         public void Resize(int length, NativeArrayOptions options = NativeArrayOptions.UninitializedMemory)
         {
             if (length < 0)
                 throw new ArgumentOutOfRangeException(nameof(length), "Length must be non-negative.");
 
-            int oldLength = m_length;
+            var oldLength = m_slots.m_length;
 
-            if (length > Capacity)
+            if (length > m_slots.m_capacity)
                 SetCapacity(length);
 
-            if (length > oldLength)
-            {
-                if ((options & NativeArrayOptions.ClearMemory) == NativeArrayOptions.ClearMemory)
-                {
-                    long num = length - oldLength;
-                    UnsafeUtility.MemClear(DataPtr + oldLength, num * sizeof(T));
-                }
+            m_slots.Resize(length);
 
-                MintIdsForRange(oldLength, length);
-            }
-
-            m_length = length;
+            if (length > oldLength && (options & NativeArrayOptions.ClearMemory) == NativeArrayOptions.ClearMemory)
+                UnsafeUtility.MemClear(DataPtr + oldLength, (long)(length - oldLength) * sizeof(T));
         }
 
         /// <summary>
-        /// Prepares meta + sparse index entries for dense slots [fromInclusive, toExclusive).
-        /// Mirrors <see cref="GetFreeSlot"/> recycle vs mint rules without writing element data.
+        /// Grows the capacity (rounded by the slot allocator). Never shrinks; use <see cref="TrimExcess"/>.
         /// </summary>
-        private void MintIdsForRange(int fromInclusive, int toExclusive)
-        {
-            for (int denseIndex = fromInclusive; denseIndex < toExclusive; denseIndex++)
-            {
-                if (m_idCapacity > denseIndex)
-                {
-                    ref StableIndexMetadata meta = ref MetaPtr[denseIndex];
-                    meta.Version++;
-                    IndicesPtr[meta.ReverseId] = denseIndex;
-                }
-                else
-                {
-                    int newId = m_idCapacity++;
-                    MetaPtr[denseIndex] = new StableIndexMetadata
-                    {
-                        ReverseId = newId,
-                        Version = 1,
-                    };
-                    IndicesPtr[newId] = denseIndex;
-                }
-            }
-        }
-        
-        /// <summary>
-        /// Sets the capacity.
-        /// </summary>
-        /// <param name="capacity">The new capacity.</param>
         public void SetCapacity(int capacity)
         {
-            SetCapacity(ref Allocator, capacity);
+            var oldCapacity = m_slots.m_capacity;
+
+            m_slots.SetCapacity(capacity);
+
+            if (m_slots.m_capacity != oldCapacity)
+                ReallocateData(m_slots.m_capacity);
         }
-        
-        private void SetCapacity<U>(ref U allocator, int capacity) where U : unmanaged, AllocatorManager.IAllocator
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void Grow()
         {
-            CollectionUtils.CheckCapacityInRange(capacity, MaxCapacity);
+            if (m_slots.m_capacity >= MaxCapacity)
+                throw new InvalidOperationException("UnsafeStableIndexList is at maximum capacity.");
 
-            var sizeOf = sizeof(T);
-            var newCapacity = math.max(capacity, CollectionHelper.CacheLineSize / sizeOf);
-            long ceilPow2 = math.ceilpow2((long)newCapacity);
-            newCapacity = (int)math.min(MaxCapacity, ceilPow2);
-
-            if (newCapacity == Capacity)
-                return;
-
-            ResizeExact(ref allocator, newCapacity);
+            SetCapacity(m_slots.m_capacity == 0 ? 8 : (int)math.min((long)m_slots.m_capacity * 2, MaxCapacity));
         }
-        
-        private void ResizeExact(int capacity)
-        {
-            ResizeExact(ref Allocator, capacity);
-        }
-        
-        private void ResizeExact<U>(ref U allocator, int newCapacity) where U : unmanaged, AllocatorManager.IAllocator
-        {
-            newCapacity = math.max(0, newCapacity);
 
-            CollectionUtils.CheckAllocator(Allocator);
+        /// <summary>
+        /// Reallocates <see cref="DataPtr"/> to <paramref name="newCapacity"/>, preserving the live dense prefix.
+        /// </summary>
+        private void ReallocateData(int newCapacity)
+        {
+            var allocator = m_slots.m_allocator;
+            CollectionUtils.CheckAllocator(allocator);
+
             T* newDataPtr = null;
-            void* newMetaAndIndicesPtr = null;
 
             if (newCapacity > 0)
             {
-                newDataPtr = (T*)AllocatorManager.Allocate(
-                    allocator.Handle,
-                    sizeof(T),
-                    UnsafeUtility.AlignOf<T>(),
-                    newCapacity
-                );
-                newMetaAndIndicesPtr = AllocatorManager.Allocate(
-                    allocator.Handle,
-                    PackedElementSize,
-                    UnsafeUtility.AlignOf<StableIndexMetadata>(),
-                    newCapacity
-                );
+                newDataPtr = (T*)AllocatorManager.Allocate(allocator, sizeof(T), UnsafeUtility.AlignOf<T>(), newCapacity);
 
-                if (m_capacity > 0)
-                {
-                    var oldCapacity = m_capacity;
-                    var itemsToCopy = math.min(newCapacity, oldCapacity);
-                    
-                    if (DataPtr != null)
-                    {
-                        var bytesToCopy = itemsToCopy * (long)sizeof(T);
-                        UnsafeUtility.MemCpy(newDataPtr, DataPtr, bytesToCopy);
-                    }
-
-                    // SoA layout: [Meta × capacity][Indices × capacity]. Copy each region
-                    // separately — the indices offset depends on capacity and moves on grow/shrink.
-                    if (_metaAndIndicesPtr != null)
-                    {
-                        var metaIntsPerElement = sizeof(StableIndexMetadata) / sizeof(int);
-                        var metaBytes = (long)itemsToCopy * sizeof(StableIndexMetadata);
-                        var indexBytes = (long)itemsToCopy * sizeof(int);
-
-                        UnsafeUtility.MemCpy(newMetaAndIndicesPtr, _metaAndIndicesPtr, metaBytes);
-
-                        var oldIndices = (int*)_metaAndIndicesPtr + oldCapacity * metaIntsPerElement;
-                        var newIndices = (int*)newMetaAndIndicesPtr + newCapacity * metaIntsPerElement;
-                        UnsafeUtility.MemCpy(newIndices, oldIndices, indexBytes);
-                    }
-                }
+                var itemsToCopy = math.min(m_slots.m_length, newCapacity);
+                if (DataPtr != null && itemsToCopy > 0)
+                    UnsafeUtility.MemCpy(newDataPtr, DataPtr, (long)itemsToCopy * sizeof(T));
             }
 
-            if (CollectionUtils.ShouldDeallocate(allocator.Handle))
-            {
-                AllocatorManager.Free(allocator.Handle, DataPtr);
-                AllocatorManager.Free(allocator.Handle, _metaAndIndicesPtr);
-            }
+            if (CollectionUtils.ShouldDeallocate(allocator))
+                AllocatorManager.Free(allocator, DataPtr);
 
             DataPtr = newDataPtr;
-            _metaAndIndicesPtr = newMetaAndIndicesPtr;
-            m_capacity = newCapacity;
-            m_idCapacity = math.min(m_idCapacity, newCapacity);
-            m_length = math.min(m_length, newCapacity);
-        }
-        
-        private int GetFreeSlot(out int version)
-        {
-            if (m_length >= m_capacity)
-                SetCapacity(m_capacity == 0 ? 8 : m_capacity * 2);
-        
-            if (m_idCapacity > m_length)
-            {
-                ref StableIndexMetadata meta = ref MetaPtr[m_length];
-                
-                meta.Version++;
-                version = meta.Version;
-                
-                return meta.ReverseId;
-            }
-
-            int newId = m_idCapacity++;
-            MetaPtr[m_length] = new StableIndexMetadata
-            {
-                ReverseId = newId,
-                Version = 1, 
-            };
-        
-            version = 1;
-            return newId;
         }
 
         public bool Equals(UnsafeStableIndexList<T> other)
         {
-            return DataPtr == other.DataPtr && m_length == other.m_length;
+            return DataPtr == other.DataPtr && m_slots.m_length == other.m_slots.m_length;
         }
 
         [BurstDiscard]
@@ -506,8 +311,8 @@ namespace Unity.Collections.Specialized
             return obj is UnsafeStableIndexList<T> other && Equals(other);
         }
 
-        public override int GetHashCode() => (int)DataPtr * 397 ^ m_capacity;
-        
+        public override int GetHashCode() => (int)DataPtr * 397 ^ m_slots.m_capacity;
+
         public static bool operator ==(UnsafeStableIndexList<T> left, UnsafeStableIndexList<T> right) => left.Equals(right);
 
         public static bool operator !=(UnsafeStableIndexList<T> left, UnsafeStableIndexList<T> right) => !left.Equals(right);
@@ -519,58 +324,51 @@ namespace Unity.Collections.Specialized
         {
             if (IsCreated == false)
                 return;
-            
-            if (CollectionUtils.ShouldDeallocate(Allocator))
-            {
-                AllocatorManager.Free(Allocator, DataPtr);
-                AllocatorManager.Free(Allocator, _metaAndIndicesPtr);
-                Allocator = AllocatorManager.Invalid;
-            }
+
+            if (CollectionUtils.ShouldDeallocate(m_slots.m_allocator))
+                AllocatorManager.Free(m_slots.m_allocator, DataPtr);
 
             DataPtr = null;
-            _metaAndIndicesPtr = null;
-            m_length = 0;
-            m_capacity = 0;
-            m_idCapacity = 0;
+            m_slots.Dispose();
         }
-        
+
         /// <summary>
         /// Creates and schedules a job that frees the memory of this list.
         /// </summary>
-        /// <param name="inputDeps">The dependency for the new job.</param>
-        /// <returns>The handle of the new job. The job depends upon `inputDeps` and frees the memory of this list.</returns>
         public JobHandle Dispose(JobHandle inputDeps)
         {
             if (IsCreated == false)
                 return inputDeps;
 
-            if (CollectionUtils.ShouldDeallocate(Allocator))
+            var allocator = m_slots.m_allocator;
+
+            if (CollectionUtils.ShouldDeallocate(allocator))
             {
                 var jobHandle = new UnsafeStableIndexListDisposeJob
                 {
                     DataPtr = DataPtr,
-                    MetaIndicesPackedPtr = _metaAndIndicesPtr,
-                    Allocator = Allocator
+                    MetaIndicesPackedPtr = m_slots.MetaPtr,
+                    Allocator = allocator
                 }.Schedule(inputDeps);
 
                 DataPtr = null;
-                _metaAndIndicesPtr = null;
-                Allocator = AllocatorManager.Invalid;
+                m_slots = default;
+                m_slots.m_allocator = AllocatorManager.Invalid;
 
                 return jobHandle;
             }
 
             DataPtr = null;
-            _metaAndIndicesPtr = null;
+            m_slots = default;
 
             return inputDeps;
         }
-        
+
         [Conditional("ENABLE_UNITY_COLLECTIONS_CHECKS")]
         private static void CheckNull(void* listData)
         {
             if (listData == null)
-                throw new InvalidOperationException("UnsafeList has yet to be created or has been destroyed!");
+                throw new InvalidOperationException("UnsafeStableIndexList has yet to be created or has been destroyed!");
         }
     }
 }

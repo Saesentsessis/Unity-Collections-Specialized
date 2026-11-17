@@ -1,202 +1,139 @@
 ﻿using System;
 using System.Runtime.CompilerServices;
-using Unity.Collections.LowLevel.Unsafe;
+using Unity.Mathematics;
 
 namespace Unity.Collections.Specialized
 {
+    /// <summary>
+    /// Managed stable-index list. Elements live in a managed <c>T[]</c> (any <typeparamref name="T"/>, including reference types);
+    /// handle / ID bookkeeping is delegated to an unmanaged <see cref="UnsafeSlotAllocator"/>, so <see cref="Dispose"/> is required.
+    /// </summary>
+    /// <remarks>
+    /// Invariant: <c>_data.Length</c> always equals the slot allocator capacity, so the allocator never grows on its own.
+    /// </remarks>
     public sealed unsafe class StableIndexList<T> : IDisposable
     {
         private T[] _data;
-        private StableIndexMetadata* _metaPtr;
-        private int* _indicesPtr;
+        private UnsafeSlotAllocator _slots;
 
-        private int _length;
-        private int _capacity;
-        private int _idCapacity;
-        private Allocator _allocator;
-
-        public int Length => _length;
-        public int Capacity => _capacity;
+        public int Length => _slots.m_length;
+        public int Capacity => _slots.m_capacity;
 
         public bool IsCreated => _data != null;
-        public bool IsEmpty => !IsCreated || _length == 0;
+        public bool IsEmpty => !IsCreated || _slots.m_length == 0;
 
-        public ReadOnlySpan<T> Data => new(_data, 0, _length);
+        public ReadOnlySpan<T> Data => new(_data, 0, _slots.m_length);
 
         public StableIndexList(Allocator allocator) : this(8, allocator) { }
 
         public StableIndexList(int capacity, Allocator allocator)
         {
-            _capacity = Math.Max(capacity, 1);
-            _data = new T[_capacity];
-            _allocator = allocator;
+            CollectionUtils.CheckAllocator(allocator);
 
-            long metaSize = _capacity * sizeof(StableIndexMetadata);
-            long indexSize = _capacity * sizeof(int);
-
-            _metaPtr = (StableIndexMetadata*)UnsafeUtility.MallocTracked(
-                metaSize, UnsafeUtility.AlignOf<StableIndexMetadata>(), _allocator, 1);
-            _indicesPtr = (int*)UnsafeUtility.MallocTracked(
-                indexSize, UnsafeUtility.AlignOf<int>(), _allocator, 1);
-
-            _length = 0;
-            _idCapacity = 0;
+            _slots = new UnsafeSlotAllocator(capacity, allocator);
+            _data = new T[_slots.m_capacity];
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public StableIndexHandle Add(T item)
         {
-            int id = GetFreeSlot(out int version);
+            if (_slots.m_length == _slots.m_capacity)
+                Grow();
 
-            _data[_length] = item;
-            _indicesPtr[id] = _length;
-            _length++;
+            var id = _slots.Allocate(out var version);
+            _data[_slots.m_length - 1] = item;
 
             return new StableIndexHandle(id, version);
         }
 
+        /// <summary>
+        /// Removes an element by handle using swap-back. Throws for invalid handles when collection checks are enabled.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Remove(in StableIndexHandle handle)
         {
             CollectionUtils.CheckHandleValid(IsValid(in handle), handle);
+            TryRemove(in handle);
+        }
 
-            int id = handle.Index;
-            int denseIndex = _indicesPtr[id];
+        /// <summary>
+        /// Removes an element by handle using swap-back. Never throws.
+        /// </summary>
+        /// <returns>False if the handle was invalid or stale (nothing removed).</returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool TryRemove(in StableIndexHandle handle)
+        {
+            if (!_slots.Release(handle.Index, handle.Version, out var removedDense, out var movedFromDense))
+                return false;
 
-            int lastDenseIndex = _length - 1;
-            int lastId = _metaPtr[lastDenseIndex].ReverseId;
+            if (removedDense != movedFromDense)
+                _data[removedDense] = _data[movedFromDense];
 
-            _metaPtr[denseIndex].Version++;
-
-            _data[denseIndex] = _data[lastDenseIndex];
-            _data[lastDenseIndex] = default;
-
-            (_metaPtr[denseIndex], _metaPtr[lastDenseIndex]) = (_metaPtr[lastDenseIndex], _metaPtr[denseIndex]);
-
-            _indicesPtr[lastId] = denseIndex;
-            _indicesPtr[id] = lastDenseIndex;
-
-            _length--;
+            // Drop the vacated reference so it can be collected.
+            _data[movedFromDense] = default;
+            return true;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool IsValid(in StableIndexHandle handle)
-        {
-            if (handle.Index < 0 || handle.Index >= _idCapacity)
-                return false;
-
-            int denseIndex = _indicesPtr[handle.Index];
-
-            if (denseIndex < 0 || denseIndex >= _length)
-                return false;
-
-            return _metaPtr[denseIndex].Version == handle.Version;
-        }
-
-        private int GetFreeSlot(out int version)
-        {
-            if (_length >= _capacity)
-                SetCapacity(_capacity * 2);
-
-            if (_idCapacity > _length)
-            {
-                ref StableIndexMetadata meta = ref _metaPtr[_length];
-                meta.Version++;
-                version = meta.Version;
-                return meta.ReverseId;
-            }
-
-            int newId = _idCapacity++;
-
-            _metaPtr[_length] = new StableIndexMetadata
-            {
-                ReverseId = newId,
-                Version = 1,
-            };
-
-            version = 1;
-            return newId;
-        }
+        public bool IsValid(in StableIndexHandle handle) => _slots.IsValid(handle.Index, handle.Version);
 
         /// <summary>
-        /// Sets the capacity. Capacity will not shrink below <see cref="Length"/>.
+        /// Grows the capacity (rounded by the slot allocator). Never shrinks; use <see cref="TrimExcess"/>.
         /// </summary>
         public void SetCapacity(int capacity)
         {
-            capacity = Math.Max(capacity, 1);
-            if (capacity < _length)
-                capacity = _length;
+            var oldCapacity = _slots.m_capacity;
 
-            if (capacity == _capacity)
-                return;
+            _slots.SetCapacity(capacity);
 
-            Reallocate(capacity);
+            if (_slots.m_capacity != oldCapacity)
+                Array.Resize(ref _data, _slots.m_capacity);
         }
 
         /// <summary>
-        /// Sets the capacity to match the length (minimum capacity remains 1).
+        /// Shrinks capacity to the smallest ID space that still covers every live ID (minimum one allocator block).
         /// </summary>
         public void TrimExcess()
         {
-            var trimmed = Math.Max(_length, 1);
-            if (trimmed == _capacity)
-                return;
+            var oldCapacity = _slots.m_capacity;
 
-            Reallocate(trimmed);
-        }
+            _slots.TrimExcess();
 
-        private void Reallocate(int newCapacity)
-        {
-            Array.Resize(ref _data, newCapacity);
+            // An empty allocator trims to zero capacity (and a null buffer); keep the list created.
+            if (_slots.m_capacity == 0)
+                _slots.SetCapacity(1);
 
-            long newMetaSize = newCapacity * sizeof(StableIndexMetadata);
-            long newIndexSize = newCapacity * sizeof(int);
-
-            StableIndexMetadata* newMetaPtr = (StableIndexMetadata*)UnsafeUtility.MallocTracked(
-                newMetaSize, UnsafeUtility.AlignOf<StableIndexMetadata>(), _allocator, 1);
-            int* newIndicesPtr = (int*)UnsafeUtility.MallocTracked(
-                newIndexSize, UnsafeUtility.AlignOf<int>(), _allocator, 1);
-
-            UnsafeUtility.MemCpy(newMetaPtr, _metaPtr, _idCapacity * sizeof(StableIndexMetadata));
-            UnsafeUtility.MemCpy(newIndicesPtr, _indicesPtr, _idCapacity * sizeof(int));
-
-            UnsafeUtility.FreeTracked(_metaPtr, _allocator);
-            UnsafeUtility.FreeTracked(_indicesPtr, _allocator);
-
-            _metaPtr = newMetaPtr;
-            _indicesPtr = newIndicesPtr;
-            _capacity = newCapacity;
-            _idCapacity = Math.Min(_idCapacity, newCapacity);
+            if (_slots.m_capacity != oldCapacity)
+                Array.Resize(ref _data, _slots.m_capacity);
         }
 
         /// <summary>
-        /// Resets length and ID capacity to 0 without zeroing unmanaged buffers.
-        /// Clears the managed data array so references can be collected.
+        /// Resets length to 0 without zeroing unmanaged buffers. Clears the managed data array so references can be collected.
         /// </summary>
         /// <remarks>
-        /// Does not change the capacity. All existing handles become invalid.
+        /// Does not change the capacity. Versions are kept, so all existing handles stay invalid.
         /// </remarks>
         public void Clear()
         {
-            if (_length > 0)
-                Array.Clear(_data, 0, _length);
+            if (_slots.m_length > 0)
+                Array.Clear(_data, 0, _slots.m_length);
 
-            _length = 0;
-            _idCapacity = 0;
+            _slots.Clear();
         }
 
         public void Dispose()
         {
-            if (_metaPtr != null)
-            {
-                UnsafeUtility.FreeTracked(_metaPtr, _allocator);
-                UnsafeUtility.FreeTracked(_indicesPtr, _allocator);
-                _metaPtr = null;
-                _indicesPtr = null;
-            }
-
+            _slots.Dispose();
             _data = null;
-            _capacity = _idCapacity = _length = 0;
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void Grow()
+        {
+            if (_slots.m_capacity >= UnsafeSlotAllocator.MaxCapacity)
+                throw new InvalidOperationException("StableIndexList is at maximum capacity.");
+
+            SetCapacity(_slots.m_capacity == 0 ? 8 : (int)math.min((long)_slots.m_capacity * 2, UnsafeSlotAllocator.MaxCapacity));
         }
 
         public T this[int index]
@@ -210,9 +147,9 @@ namespace Unity.Collections.Specialized
         public T this[in StableIndexHandle handle]
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => _data[_indicesPtr[handle.Index]];
+            get => _data[_slots.IndicesPtr[handle.Index]];
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            set => _data[_indicesPtr[handle.Index]] = value;
+            set => _data[_slots.IndicesPtr[handle.Index]] = value;
         }
     }
 }

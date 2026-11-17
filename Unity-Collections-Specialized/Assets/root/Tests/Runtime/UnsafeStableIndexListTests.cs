@@ -1,7 +1,4 @@
 using NUnit.Framework;
-using Unity.Collections;
-using Unity.Collections.LowLevel.Unsafe;
-using Unity.Jobs;
 
 namespace Unity.Collections.Specialized.Tests
 {
@@ -249,7 +246,7 @@ namespace Unity.Collections.Specialized.Tests
         }
 
         [Test]
-        public void Clear_InvalidatesExistingHandlesAndResetsIdPool()
+        public void Clear_InvalidatesExistingHandlesAndKeepsVersions()
         {
             var list = CreateList();
             try
@@ -264,9 +261,10 @@ namespace Unity.Collections.Specialized.Tests
 
                 var reused = list.Add(99);
 
-                // ID pool was reset, so the first reminted ID starts at 0 again.
-                Assert.AreEqual(0, reused.Index);
-                Assert.AreEqual(1, reused.Version);
+                // Versions survive Clear, so a re-used ID never aliases a pre-Clear handle.
+                Assert.AreEqual(first.Index, reused.Index);
+                Assert.AreNotEqual(first.Version, reused.Version);
+                Assert.IsFalse(list.IsValid(first));
                 Assert.IsTrue(list.IsValid(reused));
                 Assert.AreEqual(99, list[reused]);
             }
@@ -458,6 +456,33 @@ namespace Unity.Collections.Specialized.Tests
         }
 
         [Test]
+        public void TrimExcess_AfterRemovingLowIds_KeepsSurvivorHandleValid()
+        {
+            var list = CreateList();
+            try
+            {
+                var handles = new StableIndexHandle[8];
+                for (var i = 0; i < handles.Length; i++)
+                    handles[i] = list.Add(i * 10);
+
+                for (var i = 0; i < handles.Length - 1; i++)
+                    list.Remove(handles[i]);
+
+                list.TrimExcess();
+
+                var survivor = handles[handles.Length - 1];
+                Assert.AreEqual(1, list.Length);
+                Assert.GreaterOrEqual(list.Capacity, survivor.Index + 1);
+                Assert.IsTrue(list.IsValid(survivor));
+                Assert.AreEqual(70, list[survivor]);
+            }
+            finally
+            {
+                list.Dispose();
+            }
+        }
+
+        [Test]
         public void SetCapacity_IncreasesCapacityWithoutChangingLength()
         {
             var list = CreateList();
@@ -556,6 +581,73 @@ namespace Unity.Collections.Specialized.Tests
                 Assert.IsFalse(list.IsValid(handles[3]));
                 Assert.IsTrue(list.IsValid(handles[4]));
                 Assert.AreEqual(3, list.Length);
+            }
+            finally
+            {
+                list.Dispose();
+            }
+        }
+
+        [Test]
+        public void TryRemove_ReturnsTrueOnce_ThenFalseForStaleHandle()
+        {
+            var list = CreateList();
+            try
+            {
+                var handle = list.Add(1);
+                var other = list.Add(2);
+
+                Assert.IsTrue(list.TryRemove(handle));
+                Assert.IsFalse(list.TryRemove(handle));
+                Assert.IsFalse(list.TryRemove(StableIndexHandle.Null));
+                Assert.AreEqual(1, list.Length);
+                Assert.AreEqual(2, list[other]);
+            }
+            finally
+            {
+                list.Dispose();
+            }
+        }
+
+        [Test]
+        public void Remove_InvalidHandle_IsNoOp()
+        {
+            var list = CreateList();
+            try
+            {
+                var handle = list.Add(1);
+                var other = list.Add(2);
+                list.Remove(handle);
+
+                Assert.DoesNotThrow(() => list.Remove(handle));
+                Assert.DoesNotThrow(() => list.Remove(new StableIndexHandle(999, 1)));
+                Assert.AreEqual(1, list.Length);
+                Assert.IsTrue(list.IsValid(other));
+            }
+            finally
+            {
+                list.Dispose();
+            }
+        }
+
+        [Test]
+        public void Add_AfterClear_ReturnsHandleDistinctFromAnyPreClearHandle()
+        {
+            var list = CreateList();
+            try
+            {
+                var before = new StableIndexHandle[3];
+                for (var i = 0; i < before.Length; i++)
+                    before[i] = list.Add(i);
+
+                list.Clear();
+
+                for (var i = 0; i < before.Length; i++)
+                {
+                    var after = list.Add(i);
+                    for (var j = 0; j < before.Length; j++)
+                        Assert.AreNotEqual(before[j], after);
+                }
             }
             finally
             {
